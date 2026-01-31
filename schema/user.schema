@@ -1,0 +1,9 @@
+godborm.Where(&users, "name", "LIKE", "%Ali%")
+
+instead of this 
+
+godborm.Where(&users, {
+    name:{
+        like:"dfdf"
+    }
+})
