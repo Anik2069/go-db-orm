@@ -23,7 +23,13 @@ func SetDB(db *sql.DB) {
 // driver: "mysql", "postgres", etc.
 // dsn: database connection string
 func Connect(driver, dsn string) error {
-	db, err := sql.Open(driver, dsn)
+	// Normalize driver name for Go's sql package
+	openDriver := driver
+	if driver == "postgresql" {
+		openDriver = "postgres"
+	}
+
+	db, err := sql.Open(openDriver, dsn)
 	if err != nil {
 		return fmt.Errorf("failed to open database: %w", err)
 	}

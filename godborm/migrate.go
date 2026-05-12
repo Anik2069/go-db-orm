@@ -98,7 +98,7 @@ func createTableSQL(model Model) ([]string, error) {
 		for _, f := range model.Fields {
 			colType := mapTypeToSQL(f.Type, client.DBDriver)
 			if f.IsID {
-				if client.DBDriver == "postgres" {
+				if client.DBDriver == "postgres" || client.DBDriver == "postgresql" {
 					colType = "SERIAL PRIMARY KEY"
 				} else {
 					colType += " PRIMARY KEY AUTO_INCREMENT"
@@ -186,7 +186,7 @@ func existingColumns(tableName string) (map[string]ColumnInfo, error) {
 			}
 			result[strings.ToLower(name)] = ColumnInfo{Name: strings.ToLower(name), Type: typ}
 		}
-	case "postgres":
+	case "postgres", "postgresql":
 		rows, err := client.DB.Query(`SELECT column_name, data_type FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = $1`, tableName)
 		if err != nil {
 			return nil, err
@@ -222,7 +222,7 @@ func getRenameSQL(tableName, oldName, newName, newType string) (string, error) {
 	switch client.DBDriver {
 	case "mysql":
 		return fmt.Sprintf("ALTER TABLE %s CHANGE `%s` `%s` %s", tableName, oldName, newName, newType), nil
-	case "postgres":
+	case "postgres", "postgresql":
 		return fmt.Sprintf("ALTER TABLE %s RENAME COLUMN %s TO %s", tableName, oldName, newName), nil
 	default:
 		return "", fmt.Errorf("rename not supported for driver %s", client.DBDriver)
@@ -233,7 +233,7 @@ func getDropSQL(tableName, colName string) (string, error) {
 	switch client.DBDriver {
 	case "mysql":
 		return fmt.Sprintf("ALTER TABLE %s DROP COLUMN `%s`", tableName, colName), nil
-	case "postgres":
+	case "postgres", "postgresql":
 		return fmt.Sprintf("ALTER TABLE %s DROP COLUMN \"%s\"", tableName, colName), nil
 	default:
 		return "", fmt.Errorf("drop not supported for driver %s", client.DBDriver)

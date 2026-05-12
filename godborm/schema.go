@@ -9,9 +9,10 @@ import (
 
 // Field represents one column in a schema model.
 type Field struct {
-	Name string
-	Type string
-	IsID bool
+	Name       string
+	Type       string
+	IsID       bool
+	IsNullable bool
 }
 
 // Model represents a parsed schema model.
@@ -38,15 +39,18 @@ func parseSchemaFile(filePath string) (Model, error) {
 
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
-		if line == "" {
+		if line == "" || strings.HasPrefix(line, "//") {
 			continue
 		}
 
 		// Start of model
 		if strings.HasPrefix(line, "model") {
-			parts := strings.Fields(line)
+			// Remove { and any other non-alphanumeric chars from the name line
+			cleanLine := strings.ReplaceAll(line, "{", " ")
+			parts := strings.Fields(cleanLine)
 			if len(parts) >= 2 {
-				model.Name = parts[1]
+				model.Name = strings.Trim(parts[1], " \t\n\r{}")
+				fmt.Printf("Parsing model: %s\n", model.Name)
 			}
 			continue
 		}
@@ -62,9 +66,19 @@ func parseSchemaFile(filePath string) (Model, error) {
 			continue
 		}
 
+		typeName := strings.TrimSpace(fieldParts[1])
+		isNullable := false
+		if strings.HasSuffix(typeName, "?") {
+			isNullable = true
+			typeName = strings.TrimSuffix(typeName, "?")
+		}
+
+		fmt.Printf("  Field: %s, Type: %s (Nullable: %v)\n", fieldParts[0], typeName, isNullable)
+
 		field := Field{
-			Name: fieldParts[0],
-			Type: fieldParts[1],
+			Name:       fieldParts[0],
+			Type:       typeName,
+			IsNullable: isNullable,
 		}
 
 		if len(fieldParts) > 2 && fieldParts[2] == "@id" {
@@ -83,16 +97,16 @@ func parseSchemaFile(filePath string) (Model, error) {
 
 // mapTypeToSQL converts schema type to SQL type.
 func mapTypeToSQL(typ, driver string) string {
-	switch typ {
+	switch strings.ToLower(typ) {
 	case "int":
-		if driver == "postgres" {
+		if driver == "postgres" || driver == "postgresql" {
 			return "INTEGER"
 		}
 		return "INT"
 	case "string":
 		return "VARCHAR(255)"
 	case "datetime":
-		if driver == "postgres" {
+		if driver == "postgres" || driver == "postgresql" {
 			return "TIMESTAMP"
 		}
 		return "DATETIME"
@@ -102,17 +116,23 @@ func mapTypeToSQL(typ, driver string) string {
 }
 
 // mapTypeToGo converts schema type to Go type.
-func mapTypeToGo(typ string) string {
-	switch typ {
+func mapTypeToGo(field Field) string {
+	var goType string
+	switch field.Type {
 	case "int":
-		return "int"
+		goType = "int"
 	case "string":
-		return "string"
+		goType = "string"
 	case "datetime":
-		return "time.Time"
+		goType = "time.Time"
 	default:
-		return "string"
+		goType = "string"
 	}
+
+	if field.IsNullable {
+		return "*" + goType
+	}
+	return goType
 }
 
 // toSnakeCase converts Go/Schema names to snake_case for DB.

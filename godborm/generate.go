@@ -50,7 +50,7 @@ func renderModels(packageName string, models []Model) ([]byte, error) {
 	needsTime := false
 	for _, m := range models {
 		for _, f := range m.Fields {
-			if mapTypeToGo(f.Type) == "time.Time" {
+			if strings.Contains(mapTypeToGo(f), "time.Time") {
 				needsTime = true
 				break
 			}
@@ -63,7 +63,7 @@ func renderModels(packageName string, models []Model) ([]byte, error) {
 	for _, m := range models {
 		buf.WriteString(fmt.Sprintf("type %s struct {\n", exportName(m.Name)))
 		for _, f := range m.Fields {
-			goType := mapTypeToGo(f.Type)
+			goType := mapTypeToGo(f)
 			buf.WriteString(fmt.Sprintf("\t%s %s\n", exportName(f.Name), goType))
 		}
 		buf.WriteString("}\n\n")
