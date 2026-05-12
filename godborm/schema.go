@@ -20,9 +20,9 @@ type Model struct {
 	Fields []Field
 }
 
-// isSchemaFile returns true when the filename ends with .godb (case-sensitive).
+// isSchemaFile returns true when the filename ends with .godb or .schema.
 func isSchemaFile(name string) bool {
-	return strings.HasSuffix(name, ".godb")
+	return strings.HasSuffix(name, ".godb") || strings.HasSuffix(name, ".schema")
 }
 
 // parseSchemaFile reads a .godb file and returns a Model.
@@ -82,13 +82,19 @@ func parseSchemaFile(filePath string) (Model, error) {
 }
 
 // mapTypeToSQL converts schema type to SQL type.
-func mapTypeToSQL(typ string) string {
+func mapTypeToSQL(typ, driver string) string {
 	switch typ {
 	case "int":
+		if driver == "postgres" {
+			return "INTEGER"
+		}
 		return "INT"
 	case "string":
 		return "VARCHAR(255)"
 	case "datetime":
+		if driver == "postgres" {
+			return "TIMESTAMP"
+		}
 		return "DATETIME"
 	default:
 		return "VARCHAR(255)"

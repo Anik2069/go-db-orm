@@ -1,9 +1,5 @@
-godborm.Where(&users, "name", "LIKE", "%Ali%")
-
-instead of this 
-
-godborm.Where(&users, {
-    name:{
-        like:"dfdf"
-    }
-})
+model User {
+    id    int    @id
+    name  string
+    email string
+}

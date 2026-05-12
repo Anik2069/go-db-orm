@@ -4,7 +4,9 @@ import (
 	"fmt"
 	"go-db-orm/godborm/client"
 	"os"
+	"path/filepath"
 	"strings"
+	"time"
 )
 
 // ColumnInfo holds DB column metadata we need for migrations.
@@ -13,59 +15,100 @@ type ColumnInfo struct {
 	Type string
 }
 
-// Migrate reads schema files and creates tables in the DB.
-func Migrate(schemaPath string) error {
-	// Read all files in schemaPath
-	files, err := os.ReadDir(schemaPath)
+// Migrate reads schema files, generates migration SQL, saves it to a file, and applies it to the DB.
+func Migrate(schemaPath, migrationsPath string) error {
+	sqls, err := PlanMigration(schemaPath)
 	if err != nil {
-		return fmt.Errorf("cannot read schema folder: %w", err)
+		return err
 	}
 
+	if len(sqls) == 0 {
+		fmt.Println("No changes detected. Database is up to date.")
+		return nil
+	}
+
+	// 1. Generate migration file
+	if migrationsPath != "" {
+		if err := os.MkdirAll(migrationsPath, 0o755); err != nil {
+			return fmt.Errorf("failed to create migrations folder: %w", err)
+		}
+		timestamp := time.Now().Format("20060102150405")
+		fileName := fmt.Sprintf("%s_migration.sql", timestamp)
+		fullPath := filepath.Join(migrationsPath, fileName)
+
+		content := strings.Join(sqls, ";\n") + ";\n"
+		if err := os.WriteFile(fullPath, []byte(content), 0o644); err != nil {
+			return fmt.Errorf("failed to write migration file: %w", err)
+		}
+		fmt.Printf("Migration file generated: %s\n", fullPath)
+	}
+
+	// 2. Push to DB
+	for _, sql := range sqls {
+		if _, err := client.DB.Exec(sql); err != nil {
+			return fmt.Errorf("failed to execute migration: %w\nSQL: %s", err, sql)
+		}
+	}
+
+	fmt.Println("Migration applied to database successfully!")
+	return nil
+}
+
+// PlanMigration compares schema files with DB and returns a list of SQL statements to sync them.
+func PlanMigration(schemaPath string) ([]string, error) {
+	files, err := os.ReadDir(schemaPath)
+	if err != nil {
+		return nil, fmt.Errorf("cannot read schema folder: %w", err)
+	}
+
+	var allSqls []string
 	for _, file := range files {
 		if !isSchemaFile(file.Name()) {
 			continue
 		}
 
-		filePath := schemaPath + "/" + file.Name()
+		filePath := filepath.Join(schemaPath, file.Name())
 		model, err := parseSchemaFile(filePath)
 		if err != nil {
-			return err
+			return nil, err
 		}
 
-		if err := createTable(model); err != nil {
-			return err
+		sqls, err := createTableSQL(model)
+		if err != nil {
+			return nil, err
 		}
+		allSqls = append(allSqls, sqls...)
 	}
 
-	return nil
+	return allSqls, nil
 }
 
-func createTable(model Model) error {
+func createTableSQL(model Model) ([]string, error) {
 	tableName := toSnakeCase(model.Name)
+	var sqls []string
 
 	existingCols, err := existingColumns(tableName)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	// If table doesn't exist, create it from scratch.
 	if len(existingCols) == 0 {
 		var columns []string
 		for _, f := range model.Fields {
-			colType := mapTypeToSQL(f.Type)
+			colType := mapTypeToSQL(f.Type, client.DBDriver)
 			if f.IsID {
-				colType += " PRIMARY KEY AUTO_INCREMENT"
+				if client.DBDriver == "postgres" {
+					colType = "SERIAL PRIMARY KEY"
+				} else {
+					colType += " PRIMARY KEY AUTO_INCREMENT"
+				}
 			}
 			columns = append(columns, fmt.Sprintf("%s %s", toSnakeCase(f.Name), colType))
 		}
 
-		sqlQuery := fmt.Sprintf("CREATE TABLE IF NOT EXISTS %s (%s)", tableName, strings.Join(columns, ", "))
-		_, err := client.DB.Exec(sqlQuery)
-		if err != nil {
-			return fmt.Errorf("cannot create table %s: %w", model.Name, err)
-		}
-		fmt.Printf("Table %s created successfully!\n", tableName)
-		return nil
+		sqls = append(sqls, fmt.Sprintf("CREATE TABLE %s (%s)", tableName, strings.Join(columns, ", ")))
+		return sqls, nil
 	}
 
 	// Otherwise, add missing columns or rename when there is a single rename.
@@ -88,42 +131,40 @@ func createTable(model Model) error {
 		}
 	}
 
-	// Heuristic rename: if exactly one missing and one extra, rename column.
+	// Heuristic rename
 	if len(missing) == 1 && len(extra) == 1 {
 		newCol := missing[0]
 		oldCol := extra[0]
-		if err := renameColumn(tableName, oldCol.Name, toSnakeCase(newCol.Name), mapTypeToSQL(newCol.Type)); err == nil {
-			fmt.Printf("Renamed column %s to %s on %s\n", oldCol.Name, toSnakeCase(newCol.Name), tableName)
-			// mark rename handled
+		sql, err := getRenameSQL(tableName, oldCol.Name, toSnakeCase(newCol.Name), mapTypeToSQL(newCol.Type, client.DBDriver))
+		if err == nil {
+			sqls = append(sqls, sql)
 			missing = nil
 			extra = nil
-		} else {
-			// fall through to add path
-			fmt.Printf("Rename attempt failed (%v); adding new column instead\n", err)
 		}
 	}
 
 	for _, f := range missing {
-		colType := mapTypeToSQL(f.Type)
+		colType := mapTypeToSQL(f.Type, client.DBDriver)
 		if f.IsID {
-			colType += " PRIMARY KEY AUTO_INCREMENT"
+			if client.DBDriver == "postgres" {
+				colType = "SERIAL PRIMARY KEY"
+			} else {
+				colType += " PRIMARY KEY AUTO_INCREMENT"
+			}
 		}
 		col := fmt.Sprintf("%s %s", toSnakeCase(f.Name), colType)
-		sqlQuery := fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s", tableName, col)
-		if _, err := client.DB.Exec(sqlQuery); err != nil {
-			return fmt.Errorf("cannot add column to table %s: %w", model.Name, err)
-		}
-		fmt.Printf("Added column %s to %s\n", col, tableName)
+		sqls = append(sqls, fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s", tableName, col))
 	}
 
-	// Drop columns that are no longer in schema (after rename heuristic).
 	for _, col := range extra {
-		if err := dropColumn(tableName, col.Name); err != nil {
-			return fmt.Errorf("cannot drop column %s from %s: %w", col.Name, tableName, err)
+		sql, err := getDropSQL(tableName, col.Name)
+		if err != nil {
+			return nil, err
 		}
-		fmt.Printf("Dropped column %s from %s\n", col.Name, tableName)
+		sqls = append(sqls, sql)
 	}
-	return nil
+
+	return sqls, nil
 }
 
 // existingColumns returns a lowercase map of column name -> ColumnInfo for tableName.
@@ -177,28 +218,24 @@ func existingColumns(tableName string) (map[string]ColumnInfo, error) {
 	return result, nil
 }
 
-func renameColumn(tableName, oldName, newName, newType string) error {
+func getRenameSQL(tableName, oldName, newName, newType string) (string, error) {
 	switch client.DBDriver {
 	case "mysql":
-		_, err := client.DB.Exec(fmt.Sprintf("ALTER TABLE %s CHANGE `%s` `%s` %s", tableName, oldName, newName, newType))
-		return err
+		return fmt.Sprintf("ALTER TABLE %s CHANGE `%s` `%s` %s", tableName, oldName, newName, newType), nil
 	case "postgres":
-		_, err := client.DB.Exec(fmt.Sprintf("ALTER TABLE %s RENAME COLUMN %s TO %s", tableName, oldName, newName))
-		return err
+		return fmt.Sprintf("ALTER TABLE %s RENAME COLUMN %s TO %s", tableName, oldName, newName), nil
 	default:
-		return fmt.Errorf("rename not supported for driver %s", client.DBDriver)
+		return "", fmt.Errorf("rename not supported for driver %s", client.DBDriver)
 	}
 }
 
-func dropColumn(tableName, colName string) error {
+func getDropSQL(tableName, colName string) (string, error) {
 	switch client.DBDriver {
 	case "mysql":
-		_, err := client.DB.Exec(fmt.Sprintf("ALTER TABLE %s DROP COLUMN `%s`", tableName, colName))
-		return err
+		return fmt.Sprintf("ALTER TABLE %s DROP COLUMN `%s`", tableName, colName), nil
 	case "postgres":
-		_, err := client.DB.Exec(fmt.Sprintf("ALTER TABLE %s DROP COLUMN \"%s\"", tableName, colName))
-		return err
+		return fmt.Sprintf("ALTER TABLE %s DROP COLUMN \"%s\"", tableName, colName), nil
 	default:
-		return fmt.Errorf("drop not supported for driver %s", client.DBDriver)
+		return "", fmt.Errorf("drop not supported for driver %s", client.DBDriver)
 	}
 }

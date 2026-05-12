@@ -28,24 +28,28 @@ func main() {
 	case "migrate":
 		migrateCmd := flag.NewFlagSet("migrate", flag.ExitOnError)
 		schemaPath := migrateCmd.String("schema", "", "Path to schema folder")
+		migrationsPath := migrateCmd.String("migrations", "./migrations", "Path to save generated migration files")
+		driver := migrateCmd.String("driver", os.Getenv("DB_DRIVER"), "Database driver (mysql or postgres)")
+		dsn := migrateCmd.String("dsn", os.Getenv("DB_DSN"), "Database connection string (DSN)")
 
 		_ = migrateCmd.Parse(args[1:])
 
 		if *schemaPath == "" {
 			log.Fatal("Please provide --schema path")
 		}
+		if *driver == "" || *dsn == "" {
+			log.Fatal("Please provide --driver and --dsn (or set DB_DRIVER and DB_DSN environment variables)")
+		}
 
-		// Connect DB (from testapp)
-		err := client.Connect("mysql", "root:@tcp(localhost:3306)/testdb")
+		// Connect DB
+		err := client.Connect(*driver, *dsn)
 		if err != nil {
 			log.Fatal(err)
 		}
 		defer client.DB.Close()
 
-		fmt.Println("Connected to MySQL successfully!")
-
-		// Run migration
-		err = godborm.Migrate(*schemaPath)
+		// Run migration (generates file and pushes to DB)
+		err = godborm.Migrate(*schemaPath, *migrationsPath)
 		if err != nil {
 			log.Fatal(err)
 		}
