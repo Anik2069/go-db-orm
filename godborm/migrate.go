@@ -15,43 +15,132 @@ type ColumnInfo struct {
 	Type string
 }
 
-// Migrate reads schema files, generates migration SQL, saves it to a file, and applies it to the DB.
+// Migrate reads schema files, generates migration SQL if needed, and applies any pending migration files to the DB.
 func Migrate(schemaPath, migrationsPath string) error {
+	// 1. Ensure migrations table exists
+	if err := ensureMigrationTable(); err != nil {
+		return err
+	}
+
+	// 2. Read applied migrations from DB
+	applied, err := getAppliedMigrations()
+	if err != nil {
+		return err
+	}
+
+	// 3. Apply existing unapplied migration files from migrationsPath
+	if migrationsPath != "" {
+		files, _ := os.ReadDir(migrationsPath)
+		for _, file := range files {
+			if !file.IsDir() && strings.HasSuffix(file.Name(), ".sql") {
+				if !applied[file.Name()] {
+					fmt.Printf("Applying pending migration: %s\n", file.Name())
+					if err := applyMigrationFile(filepath.Join(migrationsPath, file.Name())); err != nil {
+						return err
+					}
+					if err := recordMigration(file.Name()); err != nil {
+						return err
+					}
+					applied[file.Name()] = true
+				}
+			}
+		}
+	}
+
+	// 4. Check for NEW schema changes
 	sqls, err := PlanMigration(schemaPath)
 	if err != nil {
 		return err
 	}
 
 	if len(sqls) == 0 {
-		fmt.Println("No changes detected. Database is up to date.")
+		fmt.Println("No new schema changes detected.")
 		return nil
 	}
 
-	// 1. Generate migration file
-	if migrationsPath != "" {
-		if err := os.MkdirAll(migrationsPath, 0o755); err != nil {
-			return fmt.Errorf("failed to create migrations folder: %w", err)
-		}
-		timestamp := time.Now().Format("20060102150405")
-		fileName := fmt.Sprintf("%s_migration.sql", timestamp)
-		fullPath := filepath.Join(migrationsPath, fileName)
+	// 5. Generate and apply a new migration file for the current changes
+	timestamp := time.Now().Format("20060102150405")
+	fileName := fmt.Sprintf("%s_migration.sql", timestamp)
+	fullPath := filepath.Join(migrationsPath, fileName)
 
-		content := strings.Join(sqls, ";\n") + ";\n"
-		if err := os.WriteFile(fullPath, []byte(content), 0o644); err != nil {
-			return fmt.Errorf("failed to write migration file: %w", err)
+	content := strings.Join(sqls, ";\n") + ";\n"
+	if err := os.WriteFile(fullPath, []byte(content), 0o644); err != nil {
+		return fmt.Errorf("failed to write migration file: %w", err)
+	}
+	fmt.Printf("New migration generated and applied: %s\n", fullPath)
+
+	if err := applyMigrationFile(fullPath); err != nil {
+		return err
+	}
+	return recordMigration(fileName)
+}
+
+func ensureMigrationTable() error {
+	var sql string
+	if client.DBDriver == "postgres" || client.DBDriver == "postgresql" {
+		sql = `CREATE TABLE IF NOT EXISTS "migrations" (
+			"id" SERIAL PRIMARY KEY,
+			"migration" VARCHAR(255) UNIQUE NOT NULL,
+			"applied_at" TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+		)`
+	} else {
+		sql = `CREATE TABLE IF NOT EXISTS migrations (
+			id INT AUTO_INCREMENT PRIMARY KEY,
+			migration VARCHAR(255) UNIQUE NOT NULL,
+			applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+		)`
+	}
+	_, err := client.DB.Exec(sql)
+	return err
+}
+
+func getAppliedMigrations() (map[string]bool, error) {
+	rows, err := client.DB.Query(`SELECT migration FROM migrations`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	applied := make(map[string]bool)
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return nil, err
 		}
-		fmt.Printf("Migration file generated: %s\n", fullPath)
+		applied[name] = true
+	}
+	return applied, nil
+}
+
+func applyMigrationFile(filePath string) error {
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		return err
 	}
 
-	// 2. Push to DB
+	// Split by semicolon for execution (basic splitter)
+	sqls := strings.Split(string(data), ";")
 	for _, sql := range sqls {
+		sql = strings.TrimSpace(sql)
+		if sql == "" {
+			continue
+		}
 		if _, err := client.DB.Exec(sql); err != nil {
-			return fmt.Errorf("failed to execute migration: %w\nSQL: %s", err, sql)
+			return fmt.Errorf("failed to execute SQL from %s: %w\nSQL: %s", filePath, err, sql)
 		}
 	}
-
-	fmt.Println("Migration applied to database successfully!")
 	return nil
+}
+
+func recordMigration(name string) error {
+	_, err := client.DB.Exec(`INSERT INTO migrations (migration) VALUES ($1)`, name)
+	if err != nil {
+		// Fallback for MySQL
+		if client.DBDriver == "mysql" {
+			_, err = client.DB.Exec(`INSERT INTO migrations (migration) VALUES (?)`, name)
+		}
+	}
+	return err
 }
 
 // PlanMigration compares schema files with DB and returns a list of SQL statements to sync them.
@@ -86,7 +175,7 @@ func PlanMigration(schemaPath string) ([]string, error) {
 }
 
 func createTableSQL(model Model) ([]string, error) {
-	tableName := toSnakeCase(model.Name)
+	tableName := client.ToTableName(model.Name)
 	quotedTable := quoteIdentifier(tableName)
 	var sqls []string
 
@@ -98,7 +187,9 @@ func createTableSQL(model Model) ([]string, error) {
 	// If table doesn't exist, create it from scratch.
 	if len(existingCols) == 0 {
 		var columns []string
+		var fks []string
 		for _, f := range model.Fields {
+			colName := client.ToSnakeCase(f.Name)
 			colType := mapTypeToSQL(f.Type, client.DBDriver)
 			if f.IsID {
 				if client.DBDriver == "postgres" || client.DBDriver == "postgresql" {
@@ -107,17 +198,25 @@ func createTableSQL(model Model) ([]string, error) {
 					colType += " PRIMARY KEY AUTO_INCREMENT"
 				}
 			}
-			columns = append(columns, fmt.Sprintf("%s %s", quoteIdentifier(toSnakeCase(f.Name)), colType))
+			columns = append(columns, fmt.Sprintf("%s %s", quoteIdentifier(colName), colType))
+
+			if f.ForeignTable != "" {
+				fks = append(fks, fmt.Sprintf("FOREIGN KEY (%s) REFERENCES %s(%s)",
+					quoteIdentifier(colName),
+					quoteIdentifier(f.ForeignTable),
+					quoteIdentifier(f.ForeignColumn)))
+			}
 		}
 
-		sqls = append(sqls, fmt.Sprintf("CREATE TABLE %s (%s)", quotedTable, strings.Join(columns, ", ")))
+		allParts := append(columns, fks...)
+		sqls = append(sqls, fmt.Sprintf("CREATE TABLE %s (%s)", quotedTable, strings.Join(allParts, ", ")))
 		return sqls, nil
 	}
 
 	// Otherwise, add missing columns or rename when there is a single rename.
 	desiredCols := make(map[string]Field)
 	for _, f := range model.Fields {
-		desiredCols[strings.ToLower(toSnakeCase(f.Name))] = f
+		desiredCols[strings.ToLower(client.ToSnakeCase(f.Name))] = f
 	}
 
 	missing := []Field{}
@@ -138,7 +237,7 @@ func createTableSQL(model Model) ([]string, error) {
 	if len(missing) == 1 && len(extra) == 1 {
 		newCol := missing[0]
 		oldCol := extra[0]
-		sql, err := getRenameSQL(tableName, oldCol.Name, toSnakeCase(newCol.Name), mapTypeToSQL(newCol.Type, client.DBDriver))
+		sql, err := getRenameSQL(tableName, oldCol.Name, client.ToSnakeCase(newCol.Name), mapTypeToSQL(newCol.Type, client.DBDriver))
 		if err == nil {
 			sqls = append(sqls, sql)
 			missing = nil
@@ -155,7 +254,7 @@ func createTableSQL(model Model) ([]string, error) {
 				colType += " PRIMARY KEY AUTO_INCREMENT"
 			}
 		}
-		col := fmt.Sprintf("%s %s", quoteIdentifier(toSnakeCase(f.Name)), colType)
+		col := fmt.Sprintf("%s %s", quoteIdentifier(client.ToSnakeCase(f.Name)), colType)
 		sqls = append(sqls, fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s", quotedTable, col))
 	}
 

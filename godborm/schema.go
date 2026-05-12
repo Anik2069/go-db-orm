@@ -3,16 +3,20 @@ package godborm
 import (
 	"bufio"
 	"fmt"
+	"go-db-orm/godborm/client"
 	"os"
 	"strings"
 )
 
 // Field represents one column in a schema model.
+// ... (rest of the file until the removed functions)
 type Field struct {
-	Name       string
-	Type       string
-	IsID       bool
-	IsNullable bool
+	Name          string
+	Type          string
+	IsID          bool
+	IsNullable    bool
+	ForeignTable  string
+	ForeignColumn string
 }
 
 // Model represents a parsed schema model.
@@ -96,8 +100,21 @@ func parseSchemaFile(filePath string) ([]Model, error) {
 			IsNullable: isNullable,
 		}
 
-		if len(fieldParts) > 2 && fieldParts[2] == "@id" {
-			field.IsID = true
+		if len(fieldParts) > 2 {
+			for _, part := range fieldParts[2:] {
+				if part == "@id" {
+					field.IsID = true
+				} else if strings.HasPrefix(part, "@foreign(") {
+					// Parse @foreign(User.id)
+					raw := strings.TrimPrefix(part, "@foreign(")
+					raw = strings.TrimSuffix(raw, ")")
+					subParts := strings.Split(raw, ".")
+					if len(subParts) == 2 {
+						field.ForeignTable = client.ToTableName(subParts[0])
+						field.ForeignColumn = client.ToSnakeCase(subParts[1])
+					}
+				}
+			}
 		}
 
 		currentModel.Fields = append(currentModel.Fields, field)
@@ -153,18 +170,6 @@ func mapTypeToGo(field Field) string {
 		return "*" + goType
 	}
 	return goType
-}
-
-// toSnakeCase converts Go/Schema names to snake_case for DB.
-func toSnakeCase(s string) string {
-	var result []rune
-	for i, r := range s {
-		if i > 0 && r >= 'A' && r <= 'Z' {
-			result = append(result, '_')
-		}
-		result = append(result, r)
-	}
-	return strings.ToLower(string(result))
 }
 
 // exportName makes the first character upper-case so the identifier is exported.

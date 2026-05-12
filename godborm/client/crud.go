@@ -10,7 +10,7 @@ import (
 func Create(model interface{}) error {
 	t := reflect.TypeOf(model).Elem()
 	v := reflect.ValueOf(model).Elem()
-	table := strings.ToLower(t.Name())
+	table := ToTableName(t.Name())
 
 	var columns []string
 	var placeholders []string
@@ -19,13 +19,14 @@ func Create(model interface{}) error {
 	for i := 0; i < t.NumField(); i++ {
 		field := t.Field(i)
 		fieldValue := v.Field(i).Interface()
-		columns = append(columns, strings.ToLower(field.Name))
+		colName := ToSnakeCase(field.Name)
+		columns = append(columns, quoteIdentifier(colName))
 		placeholders = append(placeholders, getPlaceholder(len(args)+1))
 		args = append(args, fieldValue)
 	}
 
 	sqlQuery := fmt.Sprintf("INSERT INTO %s (%s) VALUES (%s)",
-		table, strings.Join(columns, ", "), strings.Join(placeholders, ", "))
+		quoteIdentifier(table), strings.Join(columns, ", "), strings.Join(placeholders, ", "))
 
 	_, err := DB.Exec(sqlQuery, args...)
 	if err != nil {
@@ -38,9 +39,9 @@ func Create(model interface{}) error {
 // Find retrieves a single record by ID
 func Find(model interface{}, id interface{}) error {
 	t := reflect.TypeOf(model).Elem()
-	table := strings.ToLower(t.Name())
+	table := ToTableName(t.Name())
 
-	sqlQuery := fmt.Sprintf("SELECT * FROM %s WHERE id = %s LIMIT 1", table, getPlaceholder(1))
+	sqlQuery := fmt.Sprintf("SELECT * FROM %s WHERE id = %s LIMIT 1", quoteIdentifier(table), getPlaceholder(1))
 	row := DB.QueryRow(sqlQuery, id)
 
 	// Dynamically scan fields into struct
@@ -62,7 +63,7 @@ func Find(model interface{}, id interface{}) error {
 func Update(model interface{}) error {
 	t := reflect.TypeOf(model).Elem()
 	v := reflect.ValueOf(model).Elem()
-	table := strings.ToLower(t.Name())
+	table := ToTableName(t.Name())
 
 	var sets []string
 	var args []interface{}
@@ -71,11 +72,12 @@ func Update(model interface{}) error {
 	for i := 0; i < t.NumField(); i++ {
 		field := t.Field(i)
 		fieldValue := v.Field(i).Interface()
-		if strings.ToLower(field.Name) == "id" {
+		colName := ToSnakeCase(field.Name)
+		if colName == "id" {
 			id = fieldValue
 			continue
 		}
-		sets = append(sets, fmt.Sprintf("%s=%s", strings.ToLower(field.Name), getPlaceholder(len(args)+1)))
+		sets = append(sets, fmt.Sprintf("%s=%s", quoteIdentifier(colName), getPlaceholder(len(args)+1)))
 		args = append(args, fieldValue)
 	}
 
@@ -85,7 +87,7 @@ func Update(model interface{}) error {
 
 	// Add ID as the last argument
 	args = append(args, id)
-	sqlQuery := fmt.Sprintf("UPDATE %s SET %s WHERE id=%s", table, strings.Join(sets, ", "), getPlaceholder(len(args)))
+	sqlQuery := fmt.Sprintf("UPDATE %s SET %s WHERE id=%s", quoteIdentifier(table), strings.Join(sets, ", "), getPlaceholder(len(args)))
 	_, err := DB.Exec(sqlQuery, args...)
 	if err != nil {
 		return fmt.Errorf("Update error: %w", err)
@@ -97,9 +99,9 @@ func Update(model interface{}) error {
 // Delete deletes a record by ID
 func Delete(model interface{}, id interface{}) error {
 	t := reflect.TypeOf(model).Elem()
-	table := strings.ToLower(t.Name())
+	table := ToTableName(t.Name())
 
-	sqlQuery := fmt.Sprintf("DELETE FROM %s WHERE id=%s", table, getPlaceholder(1))
+	sqlQuery := fmt.Sprintf("DELETE FROM %s WHERE id=%s", quoteIdentifier(table), getPlaceholder(1))
 	_, err := DB.Exec(sqlQuery, id)
 	if err != nil {
 		return fmt.Errorf("Delete error: %w", err)
@@ -109,8 +111,15 @@ func Delete(model interface{}, id interface{}) error {
 }
 
 func getPlaceholder(n int) string {
-	if DBDriver == "postgres" {
+	if DBDriver == "postgres" || DBDriver == "postgresql" {
 		return fmt.Sprintf("$%d", n)
 	}
 	return "?"
+}
+
+func quoteIdentifier(s string) string {
+	if DBDriver == "postgres" || DBDriver == "postgresql" {
+		return fmt.Sprintf("\"%s\"", s)
+	}
+	return fmt.Sprintf("`%s`", s)
 }
