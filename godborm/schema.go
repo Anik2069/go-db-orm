@@ -26,16 +26,17 @@ func isSchemaFile(name string) bool {
 	return strings.HasSuffix(name, ".godb") || strings.HasSuffix(name, ".schema")
 }
 
-// parseSchemaFile reads a .godb file and returns a Model.
-func parseSchemaFile(filePath string) (Model, error) {
+// parseSchemaFile reads a .godb or .schema file and returns a list of Models.
+func parseSchemaFile(filePath string) ([]Model, error) {
 	f, err := os.Open(filePath)
 	if err != nil {
-		return Model{}, fmt.Errorf("cannot open file: %w", err)
+		return nil, fmt.Errorf("cannot open file: %w", err)
 	}
 	defer f.Close()
 
 	scanner := bufio.NewScanner(f)
-	var model Model
+	var models []Model
+	var currentModel *Model
 
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
@@ -45,18 +46,32 @@ func parseSchemaFile(filePath string) (Model, error) {
 
 		// Start of model
 		if strings.HasPrefix(line, "model") {
+			// If we were building a model, it's done (nested models not supported)
+			if currentModel != nil {
+				models = append(models, *currentModel)
+			}
+
+			currentModel = &Model{}
 			// Remove { and any other non-alphanumeric chars from the name line
 			cleanLine := strings.ReplaceAll(line, "{", " ")
 			parts := strings.Fields(cleanLine)
 			if len(parts) >= 2 {
-				model.Name = strings.Trim(parts[1], " \t\n\r{}")
-				fmt.Printf("Parsing model: %s\n", model.Name)
+				currentModel.Name = strings.Trim(parts[1], " \t\n\r{}")
+				fmt.Printf("Parsing model: %s\n", currentModel.Name)
 			}
 			continue
 		}
 
-		// End of model
+		// End of model (optional if next model starts, but good for explicit termination)
 		if line == "}" {
+			if currentModel != nil {
+				models = append(models, *currentModel)
+				currentModel = nil
+			}
+			continue
+		}
+
+		if currentModel == nil {
 			continue
 		}
 
@@ -85,14 +100,19 @@ func parseSchemaFile(filePath string) (Model, error) {
 			field.IsID = true
 		}
 
-		model.Fields = append(model.Fields, field)
+		currentModel.Fields = append(currentModel.Fields, field)
 	}
 
-	if model.Name == "" {
-		return Model{}, fmt.Errorf("no model found in %s", filePath)
+	// Catch last model if it didn't end with }
+	if currentModel != nil {
+		models = append(models, *currentModel)
 	}
 
-	return model, nil
+	if len(models) == 0 {
+		return nil, fmt.Errorf("no models found in %s", filePath)
+	}
+
+	return models, nil
 }
 
 // mapTypeToSQL converts schema type to SQL type.

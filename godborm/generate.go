@@ -6,6 +6,7 @@ import (
 	"go/format"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 // GenerateModels reads schema files and writes Go structs to outPath.
@@ -24,11 +25,11 @@ func GenerateModels(schemaPath, packageName, outPath string) error {
 			continue
 		}
 		filePath := filepath.Join(schemaPath, file.Name())
-		model, err := parseSchemaFile(filePath)
+		fileModels, err := parseSchemaFile(filePath)
 		if err != nil {
 			return err
 		}
-		models = append(models, model)
+		models = append(models, fileModels...)
 	}
 
 	src, err := renderModels(packageName, models)

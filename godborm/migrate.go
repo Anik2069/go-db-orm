@@ -68,16 +68,18 @@ func PlanMigration(schemaPath string) ([]string, error) {
 		}
 
 		filePath := filepath.Join(schemaPath, file.Name())
-		model, err := parseSchemaFile(filePath)
+		fileModels, err := parseSchemaFile(filePath)
 		if err != nil {
 			return nil, err
 		}
 
-		sqls, err := createTableSQL(model)
-		if err != nil {
-			return nil, err
+		for _, model := range fileModels {
+			sqls, err := createTableSQL(model)
+			if err != nil {
+				return nil, err
+			}
+			allSqls = append(allSqls, sqls...)
 		}
-		allSqls = append(allSqls, sqls...)
 	}
 
 	return allSqls, nil
@@ -85,6 +87,7 @@ func PlanMigration(schemaPath string) ([]string, error) {
 
 func createTableSQL(model Model) ([]string, error) {
 	tableName := toSnakeCase(model.Name)
+	quotedTable := quoteIdentifier(tableName)
 	var sqls []string
 
 	existingCols, err := existingColumns(tableName)
@@ -104,10 +107,10 @@ func createTableSQL(model Model) ([]string, error) {
 					colType += " PRIMARY KEY AUTO_INCREMENT"
 				}
 			}
-			columns = append(columns, fmt.Sprintf("%s %s", toSnakeCase(f.Name), colType))
+			columns = append(columns, fmt.Sprintf("%s %s", quoteIdentifier(toSnakeCase(f.Name)), colType))
 		}
 
-		sqls = append(sqls, fmt.Sprintf("CREATE TABLE %s (%s)", tableName, strings.Join(columns, ", ")))
+		sqls = append(sqls, fmt.Sprintf("CREATE TABLE %s (%s)", quotedTable, strings.Join(columns, ", ")))
 		return sqls, nil
 	}
 
@@ -146,14 +149,14 @@ func createTableSQL(model Model) ([]string, error) {
 	for _, f := range missing {
 		colType := mapTypeToSQL(f.Type, client.DBDriver)
 		if f.IsID {
-			if client.DBDriver == "postgres" {
+			if client.DBDriver == "postgres" || client.DBDriver == "postgresql" {
 				colType = "SERIAL PRIMARY KEY"
 			} else {
 				colType += " PRIMARY KEY AUTO_INCREMENT"
 			}
 		}
-		col := fmt.Sprintf("%s %s", toSnakeCase(f.Name), colType)
-		sqls = append(sqls, fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s", tableName, col))
+		col := fmt.Sprintf("%s %s", quoteIdentifier(toSnakeCase(f.Name)), colType)
+		sqls = append(sqls, fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s", quotedTable, col))
 	}
 
 	for _, col := range extra {
@@ -165,6 +168,13 @@ func createTableSQL(model Model) ([]string, error) {
 	}
 
 	return sqls, nil
+}
+
+func quoteIdentifier(s string) string {
+	if client.DBDriver == "postgres" || client.DBDriver == "postgresql" {
+		return fmt.Sprintf("\"%s\"", s)
+	}
+	return fmt.Sprintf("`%s`", s)
 }
 
 // existingColumns returns a lowercase map of column name -> ColumnInfo for tableName.
@@ -219,22 +229,24 @@ func existingColumns(tableName string) (map[string]ColumnInfo, error) {
 }
 
 func getRenameSQL(tableName, oldName, newName, newType string) (string, error) {
+	quotedTable := quoteIdentifier(tableName)
 	switch client.DBDriver {
 	case "mysql":
-		return fmt.Sprintf("ALTER TABLE %s CHANGE `%s` `%s` %s", tableName, oldName, newName, newType), nil
+		return fmt.Sprintf("ALTER TABLE %s CHANGE `%s` `%s` %s", quotedTable, oldName, newName, newType), nil
 	case "postgres", "postgresql":
-		return fmt.Sprintf("ALTER TABLE %s RENAME COLUMN %s TO %s", tableName, oldName, newName), nil
+		return fmt.Sprintf("ALTER TABLE %s RENAME COLUMN %s TO %s", quotedTable, quoteIdentifier(oldName), quoteIdentifier(newName)), nil
 	default:
 		return "", fmt.Errorf("rename not supported for driver %s", client.DBDriver)
 	}
 }
 
 func getDropSQL(tableName, colName string) (string, error) {
+	quotedTable := quoteIdentifier(tableName)
 	switch client.DBDriver {
 	case "mysql":
-		return fmt.Sprintf("ALTER TABLE %s DROP COLUMN `%s`", tableName, colName), nil
+		return fmt.Sprintf("ALTER TABLE %s DROP COLUMN `%s`", quotedTable, colName), nil
 	case "postgres", "postgresql":
-		return fmt.Sprintf("ALTER TABLE %s DROP COLUMN \"%s\"", tableName, colName), nil
+		return fmt.Sprintf("ALTER TABLE %s DROP COLUMN \"%s\"", quotedTable, colName), nil
 	default:
 		return "", fmt.Errorf("drop not supported for driver %s", client.DBDriver)
 	}
