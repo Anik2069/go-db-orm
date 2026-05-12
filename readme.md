@@ -12,7 +12,9 @@ GoDB ORM is inspired by the developer experience of Prisma and Laravel, bringing
 - **Auto-Migrations**: Detects changes and generates versioned SQL migration files automatically.
 - **Migration History**: Tracks applied migrations in a `migrations` table (multi-developer friendly).
 - **Type-Safe Models**: Generates Go structs with appropriate types (including pointers for nullable fields).
-- **Smart Naming**: Automatic snake_case and **Pluralization** (e.g., `User` -> `users`).
+- **Smart Naming**: 
+    - **DB**: Automatic snake_case and **Pluralization** (e.g., `User` -> `users`).
+    - **Go**: Automatic **PascalCase** conversion (e.g., `created_at` -> `CreatedAt`).
 - **Foreign Keys**: Simple `@foreign(Table.column)` syntax for database relationships.
 - **Reserved Word Safety**: Automatically quotes identifiers for PostgreSQL and MySQL.
 - **Zero-Flag CLI**: Uses `godborm.json` for effortless local development.
@@ -39,9 +41,9 @@ model User {
     id         int      @id
     name       string
     email      string
-    city       string?  // Nullable field
+    city       string?  // Nullable field in DB, *string in Go
     
-    created_at datetime
+    created_at datetime // CreatedAt in Go
 }
 
 model Post {
@@ -59,7 +61,8 @@ This generates SQL files in `/migrations` and syncs your database.
 
 ### 5. Generate Go Models
 ```bash
-godborm generate
+# Default package is "models", use --package main if running in root
+godborm generate --package main
 ```
 This creates a `models_gen.go` file with your Go structs.
 

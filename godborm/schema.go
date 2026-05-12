@@ -17,6 +17,7 @@ type Field struct {
 	IsNullable    bool
 	ForeignTable  string
 	ForeignColumn string
+	DefaultValue  string // e.g. "cuid()", "uuid()", "autoincrement()"
 }
 
 // Model represents a parsed schema model.
@@ -104,6 +105,14 @@ func parseSchemaFile(filePath string) ([]Model, error) {
 			for _, part := range fieldParts[2:] {
 				if part == "@id" {
 					field.IsID = true
+				} else if part == "@uuid" {
+					field.DefaultValue = "uuid()"
+				} else if part == "@cuid" {
+					field.DefaultValue = "cuid()"
+				} else if part == "@autoincrement" {
+					field.DefaultValue = "autoincrement()"
+				} else if strings.HasPrefix(part, "@default(") {
+					field.DefaultValue = strings.TrimSuffix(strings.TrimPrefix(part, "@default("), ")")
 				} else if strings.HasPrefix(part, "@foreign(") {
 					// Parse @foreign(User.id)
 					raw := strings.TrimPrefix(part, "@foreign(")
@@ -172,10 +181,14 @@ func mapTypeToGo(field Field) string {
 	return goType
 }
 
-// exportName makes the first character upper-case so the identifier is exported.
+// exportName converts snake_case or other names to PascalCase for Go exporting (e.g. created_at -> CreatedAt).
 func exportName(s string) string {
-	if s == "" {
-		return s
+	parts := strings.Split(s, "_")
+	for i, part := range parts {
+		if part == "" {
+			continue
+		}
+		parts[i] = strings.ToUpper(part[:1]) + part[1:]
 	}
-	return strings.ToUpper(s[:1]) + s[1:]
+	return strings.Join(parts, "")
 }

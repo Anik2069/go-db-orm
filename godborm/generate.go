@@ -3,6 +3,7 @@ package godborm
 import (
 	"bytes"
 	"fmt"
+	"go-db-orm/godborm/client"
 	"go/format"
 	"os"
 	"path/filepath"
@@ -65,7 +66,25 @@ func renderModels(packageName string, models []Model) ([]byte, error) {
 		buf.WriteString(fmt.Sprintf("type %s struct {\n", exportName(m.Name)))
 		for _, f := range m.Fields {
 			goType := mapTypeToGo(f)
-			buf.WriteString(fmt.Sprintf("\t%s %s\n", exportName(f.Name), goType))
+			colName := client.ToSnakeCase(f.Name)
+			tagParts := []string{
+				fmt.Sprintf("db:\"%s\"", colName),
+				fmt.Sprintf("json:\"%s,omitempty\"", colName),
+			}
+			
+			godbTag := ""
+			if f.IsID {
+				godbTag = "primary_key"
+				if f.DefaultValue != "" {
+					godbTag += "," + strings.TrimSuffix(f.DefaultValue, "()")
+				}
+			}
+			if godbTag != "" {
+				tagParts = append(tagParts, fmt.Sprintf("godb:\"%s\"", godbTag))
+			}
+
+			tag := fmt.Sprintf("`%s`", strings.Join(tagParts, " "))
+			buf.WriteString(fmt.Sprintf("\t%s %s %s\n", exportName(f.Name), goType, tag))
 		}
 		buf.WriteString("}\n\n")
 	}

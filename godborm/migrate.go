@@ -192,10 +192,21 @@ func createTableSQL(model Model) ([]string, error) {
 			colName := client.ToSnakeCase(f.Name)
 			colType := mapTypeToSQL(f.Type, client.DBDriver)
 			if f.IsID {
-				if client.DBDriver == "postgres" || client.DBDriver == "postgresql" {
-					colType = "SERIAL PRIMARY KEY"
+				if f.DefaultValue == "uuid()" {
+					if client.DBDriver == "postgres" || client.DBDriver == "postgresql" {
+						colType = "UUID PRIMARY KEY DEFAULT gen_random_uuid()"
+					} else {
+						colType = "VARCHAR(36) PRIMARY KEY"
+					}
+				} else if f.DefaultValue == "cuid()" {
+					colType = "VARCHAR(30) PRIMARY KEY"
 				} else {
-					colType += " PRIMARY KEY AUTO_INCREMENT"
+					// Default to autoincrement for int id
+					if client.DBDriver == "postgres" || client.DBDriver == "postgresql" {
+						colType = "SERIAL PRIMARY KEY"
+					} else {
+						colType += " PRIMARY KEY AUTO_INCREMENT"
+					}
 				}
 			}
 			columns = append(columns, fmt.Sprintf("%s %s", quoteIdentifier(colName), colType))
@@ -213,15 +224,34 @@ func createTableSQL(model Model) ([]string, error) {
 		return sqls, nil
 	}
 
-	// Otherwise, add missing columns or rename when there is a single rename.
+	// Otherwise, add missing columns, handle renames, and detect TYPE changes.
 	desiredCols := make(map[string]Field)
 	for _, f := range model.Fields {
 		desiredCols[strings.ToLower(client.ToSnakeCase(f.Name))] = f
 	}
 
 	missing := []Field{}
+	changed := []Field{}
 	for name, f := range desiredCols {
-		if _, ok := existingCols[name]; !ok {
+		if existing, ok := existingCols[name]; ok {
+			// Check if type changed
+			newType := mapTypeToSQL(f.Type, client.DBDriver)
+			if f.IsID {
+				if f.DefaultValue == "uuid()" {
+					if client.DBDriver == "postgres" || client.DBDriver == "postgresql" {
+						newType = "uuid"
+					} else {
+						newType = "varchar(36)"
+					}
+				} else if f.DefaultValue == "cuid()" {
+					newType = "varchar(30)"
+				}
+			}
+			
+			if !typesMatch(existing.Type, newType) {
+				changed = append(changed, f)
+			}
+		} else {
 			missing = append(missing, f)
 		}
 	}
@@ -242,6 +272,29 @@ func createTableSQL(model Model) ([]string, error) {
 			sqls = append(sqls, sql)
 			missing = nil
 			extra = nil
+		}
+	}
+
+	// Handle type changes
+	for _, f := range changed {
+		colName := client.ToSnakeCase(f.Name)
+		newType := mapTypeToSQL(f.Type, client.DBDriver)
+		if f.IsID {
+			if f.DefaultValue == "uuid()" {
+				if client.DBDriver == "postgres" || client.DBDriver == "postgresql" {
+					newType = "UUID USING " + quoteIdentifier(colName) + "::uuid"
+				} else {
+					newType = "VARCHAR(36)"
+				}
+			} else if f.DefaultValue == "cuid()" {
+				newType = "VARCHAR(30)"
+			}
+		}
+		
+		if client.DBDriver == "postgres" || client.DBDriver == "postgresql" {
+			sqls = append(sqls, fmt.Sprintf("ALTER TABLE %s ALTER COLUMN %s TYPE %s", quotedTable, quoteIdentifier(colName), newType))
+		} else {
+			sqls = append(sqls, fmt.Sprintf("ALTER TABLE %s MODIFY COLUMN %s %s", quotedTable, quoteIdentifier(colName), newType))
 		}
 	}
 
@@ -274,6 +327,24 @@ func quoteIdentifier(s string) string {
 		return fmt.Sprintf("\"%s\"", s)
 	}
 	return fmt.Sprintf("`%s`", s)
+}
+
+func typesMatch(existing, desired string) bool {
+	existing = strings.ToLower(existing)
+	desired = strings.ToLower(desired)
+
+	// Normalize PostgreSQL types
+	if existing == "integer" {
+		existing = "int"
+	}
+	if strings.HasPrefix(existing, "character varying") {
+		existing = "varchar"
+	}
+	if strings.HasPrefix(desired, "varchar") {
+		desired = "varchar"
+	}
+
+	return strings.Contains(existing, desired) || strings.Contains(desired, existing)
 }
 
 // existingColumns returns a lowercase map of column name -> ColumnInfo for tableName.
