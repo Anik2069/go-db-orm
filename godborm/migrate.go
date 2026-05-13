@@ -189,7 +189,11 @@ func createTableSQL(model Model) ([]string, error) {
 		var columns []string
 		var fks []string
 		for _, f := range model.Fields {
+			if f.IsRelation() {
+				continue
+			}
 			colName := client.ToSnakeCase(f.Name)
+
 			colType := mapTypeToSQL(f.Type, client.DBDriver)
 			if f.IsID {
 				if f.DefaultValue == "uuid()" {
@@ -227,8 +231,12 @@ func createTableSQL(model Model) ([]string, error) {
 	// Otherwise, add missing columns, handle renames, and detect TYPE changes.
 	desiredCols := make(map[string]Field)
 	for _, f := range model.Fields {
+		if f.IsRelation() {
+			continue
+		}
 		desiredCols[strings.ToLower(client.ToSnakeCase(f.Name))] = f
 	}
+
 
 	missing := []Field{}
 	changed := []Field{}

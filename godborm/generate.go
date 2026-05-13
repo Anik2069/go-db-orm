@@ -67,10 +67,15 @@ func renderModels(packageName string, models []Model) ([]byte, error) {
 		for _, f := range m.Fields {
 			goType := mapTypeToGo(f)
 			colName := client.ToSnakeCase(f.Name)
-			tagParts := []string{
-				fmt.Sprintf("db:\"%s\"", colName),
-				fmt.Sprintf("json:\"%s,omitempty\"", colName),
+			
+			isRelation := f.IsRelation()
+			
+			tagParts := []string{}
+
+			if !isRelation {
+				tagParts = append(tagParts, fmt.Sprintf("db:\"%s\"", colName))
 			}
+			tagParts = append(tagParts, fmt.Sprintf("json:\"%s,omitempty\"", colName))
 			
 			godbTag := ""
 			if f.IsID {
@@ -78,14 +83,27 @@ func renderModels(packageName string, models []Model) ([]byte, error) {
 				if f.DefaultValue != "" {
 					godbTag += "," + strings.TrimSuffix(f.DefaultValue, "()")
 				}
+			} else if isRelation {
+				godbTag = "relation"
+				if f.Relation != nil {
+					if len(f.Relation.Fields) > 0 {
+						godbTag += ",fields=" + strings.Join(f.Relation.Fields, ":")
+					}
+					if len(f.Relation.References) > 0 {
+						godbTag += ",references=" + strings.Join(f.Relation.References, ":")
+					}
+				}
 			}
+
 			if godbTag != "" {
 				tagParts = append(tagParts, fmt.Sprintf("godb:\"%s\"", godbTag))
 			}
 
+
 			tag := fmt.Sprintf("`%s`", strings.Join(tagParts, " "))
 			buf.WriteString(fmt.Sprintf("\t%s %s %s\n", exportName(f.Name), goType, tag))
 		}
+
 		buf.WriteString("}\n\n")
 	}
 

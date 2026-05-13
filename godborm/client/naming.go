@@ -26,11 +26,15 @@ func pluralize(s string) string {
 	if s == "" {
 		return s
 	}
+	if strings.HasSuffix(s, "s") {
+		return s
+	}
 	if strings.HasSuffix(s, "y") && !strings.HasSuffix(s, "ay") && !strings.HasSuffix(s, "ey") && !strings.HasSuffix(s, "iy") && !strings.HasSuffix(s, "oy") && !strings.HasSuffix(s, "uy") {
 		return s[:len(s)-1] + "ies"
 	}
-	if strings.HasSuffix(s, "s") || strings.HasSuffix(s, "x") || strings.HasSuffix(s, "ch") || strings.HasSuffix(s, "sh") {
+	if strings.HasSuffix(s, "x") || strings.HasSuffix(s, "ch") || strings.HasSuffix(s, "sh") {
 		return s + "es"
 	}
 	return s + "s"
 }
+

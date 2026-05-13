@@ -9,13 +9,25 @@ import (
 
 // DBBuilder allows for chaining query options
 type DBBuilder struct {
-	selectedCols []string
+	selectedCols     []string
+	includedRelations []string
 }
 
 // Select specifies the columns to retrieve
 func Select(cols ...string) *DBBuilder {
 	return &DBBuilder{selectedCols: cols}
 }
+
+// Include specifies the relations to load
+func (b *DBBuilder) Include(relations ...string) *DBBuilder {
+	b.includedRelations = append(b.includedRelations, relations...)
+	return b
+}
+
+func Include(relations ...string) *DBBuilder {
+	return (&DBBuilder{}).Include(relations...)
+}
+
 
 // Create inserts a new record into the database
 func Create(model interface{}) error {
@@ -26,13 +38,28 @@ func Create(model interface{}) error {
 	var columns []string
 	var placeholders []string
 	var args []interface{}
+	var autoIncrField string
+	var autoIncrIdx int
 
 	for i := 0; i < t.NumField(); i++ {
 		field := t.Field(i)
 		fieldValue := v.Field(i)
-		
-		// Handle godb tags for ID generation
+
+		// Skip relations
+		if isRelationField(field) {
+			continue
+		}
+
 		tag := field.Tag.Get("godb")
+
+		// Skip auto-increment fields during insert
+		if strings.Contains(tag, "autoincrement") {
+			autoIncrField = field.Name
+			autoIncrIdx = i
+			continue
+		}
+
+		// Handle godb tags for ID generation
 		if strings.Contains(tag, "cuid") && fieldValue.String() == "" {
 			cuid := generateCUID()
 			fieldValue.SetString(cuid)
@@ -41,7 +68,12 @@ func Create(model interface{}) error {
 			fieldValue.SetString(uuid)
 		}
 
-		colName := ToSnakeCase(field.Name)
+		dbTag := field.Tag.Get("db")
+		colName := dbTag
+		if colName == "" {
+			colName = ToSnakeCase(field.Name)
+		}
+
 		columns = append(columns, quoteIdentifier(colName))
 		placeholders = append(placeholders, getPlaceholder(len(args)+1))
 		args = append(args, fieldValue.Interface())
@@ -50,13 +82,38 @@ func Create(model interface{}) error {
 	sqlQuery := fmt.Sprintf("INSERT INTO %s (%s) VALUES (%s)",
 		quoteIdentifier(table), strings.Join(columns, ", "), strings.Join(placeholders, ", "))
 
-	_, err := DB.Exec(sqlQuery, args...)
-	if err != nil {
-		return fmt.Errorf("Create error: %w", err)
+	if autoIncrField != "" && (DBDriver == "postgres" || DBDriver == "postgresql") {
+		// Use RETURNING for Postgres
+		dbTag := t.Field(autoIncrIdx).Tag.Get("db")
+		colName := dbTag
+		if colName == "" {
+			colName = ToSnakeCase(autoIncrField)
+		}
+		sqlQuery += fmt.Sprintf(" RETURNING %s", quoteIdentifier(colName))
+
+		var lastID int64
+		err := DB.QueryRow(sqlQuery, args...).Scan(&lastID)
+		if err != nil {
+			return fmt.Errorf("Create error (postgres): %w", err)
+		}
+		v.Field(autoIncrIdx).SetInt(lastID)
+	} else {
+		res, err := DB.Exec(sqlQuery, args...)
+		if err != nil {
+			return fmt.Errorf("Create error: %w", err)
+		}
+
+		if autoIncrField != "" {
+			lastID, err := res.LastInsertId()
+			if err == nil {
+				v.Field(autoIncrIdx).SetInt(lastID)
+			}
+		}
 	}
 
 	return nil
 }
+
 
 // FindAll retrieves records from the database into a slice.
 func (b *DBBuilder) FindAll(dest interface{}) error {
@@ -101,16 +158,28 @@ func (b *DBBuilder) FindAll(dest interface{}) error {
 				}
 			}
 		} else {
-			for i := 0; i < item.NumField(); i++ {
+			for i := 0; i < t.NumField(); i++ {
+				if isRelationField(t.Field(i)) {
+					continue
+				}
 				scanTargets = append(scanTargets, item.Field(i).Addr().Interface())
 			}
 		}
 
+
 		if err := rows.Scan(scanTargets...); err != nil {
 			return fmt.Errorf("FindAll scan error: %w", err)
 		}
+
+		if len(b.includedRelations) > 0 {
+			if err := b.loadRelations(item, b.includedRelations); err != nil {
+				return err
+			}
+		}
+
 		v.Set(reflect.Append(v, item))
 	}
+
 
 	return nil
 }
@@ -151,18 +220,27 @@ func (b *DBBuilder) Find(model interface{}, id interface{}) error {
 			}
 		}
 	} else {
-		for i := 0; i < v.NumField(); i++ {
+		for i := 0; i < t.NumField(); i++ {
+			if isRelationField(t.Field(i)) {
+				continue
+			}
 			scanTargets = append(scanTargets, v.Field(i).Addr().Interface())
 		}
 	}
+
 
 	err := row.Scan(scanTargets...)
 	if err != nil {
 		return fmt.Errorf("Find error: %w", err)
 	}
 
+	if len(b.includedRelations) > 0 {
+		return b.loadRelations(v, b.includedRelations)
+	}
+
 	return nil
 }
+
 
 // Global Shortcuts
 func FindAll(dest interface{}) error {
@@ -185,8 +263,17 @@ func Update(model interface{}) error {
 
 	for i := 0; i < t.NumField(); i++ {
 		field := t.Field(i)
+		if isRelationField(field) {
+			continue
+		}
+
 		fieldValue := v.Field(i).Interface()
-		colName := ToSnakeCase(field.Name)
+		dbTag := field.Tag.Get("db")
+		colName := dbTag
+		if colName == "" {
+			colName = ToSnakeCase(field.Name)
+		}
+
 		if colName == "id" {
 			id = fieldValue
 			continue
@@ -194,6 +281,7 @@ func Update(model interface{}) error {
 		sets = append(sets, fmt.Sprintf("%s=%s", quoteIdentifier(colName), getPlaceholder(len(args)+1)))
 		args = append(args, fieldValue)
 	}
+
 
 	if id == nil {
 		return fmt.Errorf("Update error: ID field is required")
@@ -218,10 +306,40 @@ func Delete(model interface{}, id interface{}) error {
 func getColumns(t reflect.Type) string {
 	var cols []string
 	for i := 0; i < t.NumField(); i++ {
-		cols = append(cols, quoteIdentifier(ToSnakeCase(t.Field(i).Name)))
+		field := t.Field(i)
+		if isRelationField(field) {
+			continue
+		}
+		
+		dbTag := field.Tag.Get("db")
+		colName := dbTag
+		if colName == "" {
+			colName = ToSnakeCase(field.Name)
+		}
+		cols = append(cols, quoteIdentifier(colName))
 	}
 	return strings.Join(cols, ", ")
 }
+
+func isRelationField(field reflect.StructField) bool {
+	godbTag := field.Tag.Get("godb")
+	if strings.Contains(godbTag, "relation") {
+		return true
+	}
+	// Also skip if it has no db tag and is a complex type (struct or slice)
+	dbTag := field.Tag.Get("db")
+	if dbTag == "" {
+		k := field.Type.Kind()
+		if k == reflect.Ptr {
+			k = field.Type.Elem().Kind()
+		}
+		if k == reflect.Struct || k == reflect.Slice {
+			return true
+		}
+	}
+	return false
+}
+
 
 func getPlaceholder(n int) string {
 	if DBDriver == "postgres" || DBDriver == "postgresql" {
@@ -230,7 +348,126 @@ func getPlaceholder(n int) string {
 	return "?"
 }
 
+func (b *DBBuilder) loadRelations(v reflect.Value, relations []string) error {
+	t := v.Type()
+	for _, relName := range relations {
+		field, ok := t.FieldByName(relName)
+		if !ok {
+			// Try finding by tag or lowercase?
+			continue
+		}
+
+		tag := field.Tag.Get("godb")
+		if !strings.Contains(tag, "relation") {
+			continue
+		}
+
+		// fields=user_id,references=id
+		relFields, relRefs := parseRelationMetadata(tag)
+		if len(relFields) == 0 {
+			// Back-relations not supported yet for simplicity
+			continue
+		}
+
+		// Get values from the current object
+		// Assume single field for now
+		localCol := relFields[0]
+		refCol := relRefs[0]
+
+		var localVal interface{}
+		found := false
+		for i := 0; i < t.NumField(); i++ {
+			f := t.Field(i)
+			if strings.ToLower(f.Tag.Get("db")) == strings.ToLower(localCol) || strings.ToLower(ToSnakeCase(f.Name)) == strings.ToLower(localCol) {
+				localVal = v.Field(i).Interface()
+				found = true
+				break
+			}
+		}
+
+		if !found {
+			continue
+		}
+
+		targetType := field.Type
+		isSlice := targetType.Kind() == reflect.Slice
+		if isSlice {
+			targetType = targetType.Elem()
+		} else if targetType.Kind() == reflect.Ptr {
+			targetType = targetType.Elem()
+		}
+
+		targetTable := ToTableName(targetType.Name())
+		
+		if isSlice {
+			// Load many
+			sliceVal := reflect.New(field.Type).Elem()
+			sql := fmt.Sprintf("SELECT %s FROM %s WHERE %s = %s", 
+				getColumns(targetType), quoteIdentifier(targetTable), quoteIdentifier(refCol), getPlaceholder(1))
+			
+			rows, err := DB.Query(sql, localVal)
+			if err != nil {
+				return err
+			}
+			defer rows.Close()
+			for rows.Next() {
+				item := reflect.New(targetType).Elem()
+				targets := getScanTargets(item)
+				if err := rows.Scan(targets...); err != nil {
+					return err
+				}
+				sliceVal = reflect.Append(sliceVal, item)
+			}
+			v.FieldByName(relName).Set(sliceVal)
+		} else {
+			// Load one
+			item := reflect.New(targetType).Elem()
+			sql := fmt.Sprintf("SELECT %s FROM %s WHERE %s = %s LIMIT 1", 
+				getColumns(targetType), quoteIdentifier(targetTable), quoteIdentifier(refCol), getPlaceholder(1))
+			
+			row := DB.QueryRow(sql, localVal)
+			targets := getScanTargets(item)
+			if err := row.Scan(targets...); err != nil {
+				continue // Or return error? If optional, maybe skip.
+			}
+			
+			if field.Type.Kind() == reflect.Ptr {
+				v.FieldByName(relName).Set(item.Addr())
+			} else {
+				v.FieldByName(relName).Set(item)
+			}
+		}
+	}
+	return nil
+}
+
+func getScanTargets(v reflect.Value) []interface{} {
+	t := v.Type()
+	var targets []interface{}
+	for i := 0; i < t.NumField(); i++ {
+		if isRelationField(t.Field(i)) {
+			continue
+		}
+		targets = append(targets, v.Field(i).Addr().Interface())
+	}
+	return targets
+}
+
+func parseRelationMetadata(tag string) (fields []string, references []string) {
+	parts := strings.Split(tag, ",")
+	for _, p := range parts {
+		if strings.HasPrefix(p, "fields=") {
+			fields = strings.Split(strings.TrimPrefix(p, "fields="), ":")
+		}
+		if strings.HasPrefix(p, "references=") {
+			references = strings.Split(strings.TrimPrefix(p, "references="), ":")
+		}
+	}
+	return
+}
+
 func quoteIdentifier(s string) string {
+
 	if DBDriver == "postgres" || DBDriver == "postgresql" {
 		return fmt.Sprintf("\"%s\"", s)
 	}
