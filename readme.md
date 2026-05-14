@@ -129,6 +129,22 @@ client.Select("invoice_number").Include("Items:item_name,quantity", "User").Find
 ### Clean JSON Output
 Internal fields (like join keys added for relations) are automatically zeroed out after relations are loaded. This allows Go's `json:"...,omitempty"` to hide them, keeping your API responses clean and respecting your `Select()` intent.
 
+### Raw SQL Queries 🛠
+Sometimes you need full control. Use `.Raw()` to execute arbitrary SQL:
+
+```go
+// Fetch into a slice of structs
+var users []User
+client.Raw("SELECT * FROM users WHERE email LIKE $1", "%@gmail.com").Scan(&users)
+
+// Fetch a single value
+var count int
+client.Raw("SELECT COUNT(*) FROM users").Scan(&count)
+
+// Execute a command (Update/Delete)
+client.Raw("DELETE FROM users WHERE id = $1", 123).Exec()
+```
+
 ---
 
 ---

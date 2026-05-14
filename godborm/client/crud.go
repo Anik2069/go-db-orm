@@ -2,6 +2,7 @@ package client
 
 import (
 	"crypto/rand"
+	"database/sql"
 	"fmt"
 	"reflect"
 	"strings"
@@ -263,6 +264,94 @@ func FindAll(dest interface{}) error {
 
 func Find(model interface{}, id interface{}) error {
 	return (&DBBuilder{}).Find(model, id)
+}
+
+// Raw Query support
+type RawBuilder struct {
+	sql  string
+	args []interface{}
+}
+
+func Raw(query string, args ...interface{}) *RawBuilder {
+	return &RawBuilder{sql: query, args: args}
+}
+
+func (rb *RawBuilder) Exec() (sql.Result, error) {
+	return DB.Exec(rb.sql, rb.args...)
+}
+
+func (rb *RawBuilder) Scan(dest interface{}) error {
+	v := reflect.ValueOf(dest)
+	if v.Kind() != reflect.Ptr {
+		return fmt.Errorf("Raw.Scan: destination must be a pointer")
+	}
+	v = v.Elem()
+
+	rows, err := DB.Query(rb.sql, rb.args...)
+	if err != nil {
+		return fmt.Errorf("Raw.Scan error: %w", err)
+	}
+	defer rows.Close()
+
+	cols, err := rows.Columns()
+	if err != nil {
+		return fmt.Errorf("Raw.Scan columns error: %w", err)
+	}
+
+	isSlice := v.Kind() == reflect.Slice
+	targetType := v.Type()
+	if isSlice {
+		targetType = targetType.Elem()
+	}
+
+	foundAny := false
+	for rows.Next() {
+		foundAny = true
+		var item reflect.Value
+		var targets []interface{}
+
+		if targetType.Kind() == reflect.Struct {
+			item = reflect.New(targetType).Elem()
+			targets = make([]interface{}, len(cols))
+			for i, col := range cols {
+				found := false
+				for j := 0; j < targetType.NumField(); j++ {
+					field := targetType.Field(j)
+					dbTag := field.Tag.Get("db")
+					if strings.ToLower(dbTag) == strings.ToLower(col) || strings.ToLower(ToSnakeCase(field.Name)) == strings.ToLower(col) {
+						targets[i] = item.Field(j).Addr().Interface()
+						found = true
+						break
+					}
+				}
+				if !found {
+					var dummy interface{}
+					targets[i] = &dummy
+				}
+			}
+		} else {
+			// Basic type
+			item = reflect.New(targetType).Elem()
+			targets = []interface{}{item.Addr().Interface()}
+		}
+
+		if err := rows.Scan(targets...); err != nil {
+			return fmt.Errorf("Raw.Scan rows.Scan error: %w", err)
+		}
+
+		if isSlice {
+			v.Set(reflect.Append(v, item))
+		} else {
+			v.Set(item)
+			return nil
+		}
+	}
+
+	if !isSlice && !foundAny {
+		return sql.ErrNoRows
+	}
+
+	return nil
 }
 
 // Update updates a record by ID
