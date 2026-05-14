@@ -3,7 +3,7 @@ package godborm
 import (
 	"bytes"
 	"fmt"
-	"go-db-orm/godborm/client"
+	"github.com/Anik2069/go-db-orm/godborm/client"
 	"go/format"
 	"os"
 	"path/filepath"

@@ -1,4 +1,4 @@
-module go-db-orm
+module github.com/Anik2069/go-db-orm
 
 go 1.24.4
 

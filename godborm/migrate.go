@@ -2,7 +2,7 @@ package godborm
 
 import (
 	"fmt"
-	"go-db-orm/godborm/client"
+	"github.com/Anik2069/go-db-orm/godborm/client"
 	"os"
 	"path/filepath"
 	"strings"
