@@ -9,8 +9,9 @@ import (
 
 // DBBuilder allows for chaining query options
 type DBBuilder struct {
-	selectedCols     []string
+	selectedCols      []string
 	includedRelations []string
+	autoAddedCols     []string
 }
 
 // Select specifies the columns to retrieve
@@ -120,6 +121,7 @@ func (b *DBBuilder) FindAll(dest interface{}) error {
 	v := reflect.ValueOf(dest).Elem()
 	t := v.Type().Elem()
 	table := ToTableName(t.Name())
+	b.ensureRelationFields(t)
 
 	var queryCols string
 	if len(b.selectedCols) > 0 {
@@ -175,6 +177,10 @@ func (b *DBBuilder) FindAll(dest interface{}) error {
 			if err := b.loadRelations(item, b.includedRelations); err != nil {
 				return err
 			}
+			// Clear auto-added fields so they don't show up in JSON (respecting Select intent)
+			for _, col := range b.autoAddedCols {
+				clearField(item, col)
+			}
 		}
 
 		v.Set(reflect.Append(v, item))
@@ -189,6 +195,7 @@ func (b *DBBuilder) Find(model interface{}, id interface{}) error {
 	v := reflect.ValueOf(model).Elem()
 	t := v.Type()
 	table := ToTableName(t.Name())
+	b.ensureRelationFields(t)
 
 	var queryCols string
 	if len(b.selectedCols) > 0 {
@@ -235,7 +242,14 @@ func (b *DBBuilder) Find(model interface{}, id interface{}) error {
 	}
 
 	if len(b.includedRelations) > 0 {
-		return b.loadRelations(v, b.includedRelations)
+		if err := b.loadRelations(v, b.includedRelations); err != nil {
+			return err
+		}
+		// Clear auto-added fields
+		for _, col := range b.autoAddedCols {
+			clearField(v, col)
+		}
+		return nil
 	}
 
 	return nil
@@ -350,7 +364,8 @@ func getPlaceholder(n int) string {
 
 func (b *DBBuilder) loadRelations(v reflect.Value, relations []string) error {
 	t := v.Type()
-	for _, relName := range relations {
+	for _, relStr := range relations {
+		relName, relCols := parseInclude(relStr)
 		field, ok := t.FieldByName(relName)
 		if !ok {
 			// Try finding by tag or lowercase?
@@ -402,8 +417,20 @@ func (b *DBBuilder) loadRelations(v reflect.Value, relations []string) error {
 		if isSlice {
 			// Load many
 			sliceVal := reflect.New(field.Type).Elem()
+			
+			var queryCols string
+			if len(relCols) > 0 {
+				var quoted []string
+				for _, c := range relCols {
+					quoted = append(quoted, quoteIdentifier(c))
+				}
+				queryCols = strings.Join(quoted, ", ")
+			} else {
+				queryCols = getColumns(targetType)
+			}
+
 			sql := fmt.Sprintf("SELECT %s FROM %s WHERE %s = %s", 
-				getColumns(targetType), quoteIdentifier(targetTable), quoteIdentifier(refCol), getPlaceholder(1))
+				queryCols, quoteIdentifier(targetTable), quoteIdentifier(refCol), getPlaceholder(1))
 			
 			rows, err := DB.Query(sql, localVal)
 			if err != nil {
@@ -412,7 +439,13 @@ func (b *DBBuilder) loadRelations(v reflect.Value, relations []string) error {
 			defer rows.Close()
 			for rows.Next() {
 				item := reflect.New(targetType).Elem()
-				targets := getScanTargets(item)
+				var targets []interface{}
+				if len(relCols) > 0 {
+					targets = getSpecificScanTargets(item, relCols)
+				} else {
+					targets = getScanTargets(item)
+				}
+
 				if err := rows.Scan(targets...); err != nil {
 					return err
 				}
@@ -422,11 +455,29 @@ func (b *DBBuilder) loadRelations(v reflect.Value, relations []string) error {
 		} else {
 			// Load one
 			item := reflect.New(targetType).Elem()
+			
+			var queryCols string
+			if len(relCols) > 0 {
+				var quoted []string
+				for _, c := range relCols {
+					quoted = append(quoted, quoteIdentifier(c))
+				}
+				queryCols = strings.Join(quoted, ", ")
+			} else {
+				queryCols = getColumns(targetType)
+			}
+
 			sql := fmt.Sprintf("SELECT %s FROM %s WHERE %s = %s LIMIT 1", 
-				getColumns(targetType), quoteIdentifier(targetTable), quoteIdentifier(refCol), getPlaceholder(1))
+				queryCols, quoteIdentifier(targetTable), quoteIdentifier(refCol), getPlaceholder(1))
 			
 			row := DB.QueryRow(sql, localVal)
-			targets := getScanTargets(item)
+			var targets []interface{}
+			if len(relCols) > 0 {
+				targets = getSpecificScanTargets(item, relCols)
+			} else {
+				targets = getScanTargets(item)
+			}
+
 			if err := row.Scan(targets...); err != nil {
 				continue // Or return error? If optional, maybe skip.
 			}
@@ -439,6 +490,83 @@ func (b *DBBuilder) loadRelations(v reflect.Value, relations []string) error {
 		}
 	}
 	return nil
+}
+
+func (b *DBBuilder) ensureRelationFields(t reflect.Type) {
+	if len(b.includedRelations) == 0 || len(b.selectedCols) == 0 {
+		return
+	}
+
+	selectedMap := make(map[string]bool)
+	for _, col := range b.selectedCols {
+		selectedMap[strings.ToLower(col)] = true
+	}
+
+	for _, relStr := range b.includedRelations {
+		relName, _ := parseInclude(relStr)
+		field, ok := t.FieldByName(relName)
+		if !ok {
+			continue
+		}
+		tag := field.Tag.Get("godb")
+		if !strings.Contains(tag, "relation") {
+			continue
+		}
+		fields, _ := parseRelationMetadata(tag)
+		for _, f := range fields {
+			if !selectedMap[strings.ToLower(f)] {
+				b.selectedCols = append(b.selectedCols, f)
+				selectedMap[strings.ToLower(f)] = true
+				b.autoAddedCols = append(b.autoAddedCols, f)
+			}
+		}
+	}
+}
+
+func clearField(v reflect.Value, colName string) {
+	t := v.Type()
+	for i := 0; i < t.NumField(); i++ {
+		f := t.Field(i)
+		if strings.ToLower(f.Tag.Get("db")) == strings.ToLower(colName) || strings.ToLower(ToSnakeCase(f.Name)) == strings.ToLower(colName) {
+			v.Field(i).Set(reflect.Zero(f.Type))
+			return
+		}
+	}
+}
+
+func parseInclude(rel string) (name string, cols []string) {
+	if strings.Contains(rel, ":") {
+		parts := strings.SplitN(rel, ":", 2)
+		name = parts[0]
+		cols = strings.Split(parts[1], ",")
+		for i := range cols {
+			cols[i] = strings.TrimSpace(cols[i])
+		}
+		return
+	}
+	return rel, nil
+}
+
+func getSpecificScanTargets(v reflect.Value, cols []string) []interface{} {
+	t := v.Type()
+	var targets []interface{}
+	for _, col := range cols {
+		found := false
+		for i := 0; i < t.NumField(); i++ {
+			f := t.Field(i)
+			if strings.ToLower(f.Tag.Get("db")) == strings.ToLower(col) || strings.ToLower(ToSnakeCase(f.Name)) == strings.ToLower(col) {
+				targets = append(targets, v.Field(i).Addr().Interface())
+				found = true
+				break
+			}
+		}
+		if !found {
+			// Add a dummy target to avoid scan error if column not in struct
+			var dummy interface{}
+			targets = append(targets, &dummy)
+		}
+	}
+	return targets
 }
 
 func getScanTargets(v reflect.Value) []interface{} {

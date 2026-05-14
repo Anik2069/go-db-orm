@@ -17,6 +17,10 @@ GoDB ORM is inspired by the developer experience of Prisma and Laravel, bringing
     - **Go**: Automatic **PascalCase** conversion (e.g., `created_at` -> `CreatedAt`).
 - **Foreign Keys**: Simple `@foreign(Table.column)` syntax for database relationships.
 - **Reserved Word Safety**: Automatically quotes identifiers for PostgreSQL and MySQL.
+- **Smart Relation Loading**: 
+    - **Filtered Includes**: Select specific fields for relations using `Relation:col1,col2` syntax.
+    - **Auto-Linking**: Automatically fetches required join keys for relations if missing from `Select()`.
+    - **Clean JSON**: Respects `Select()` by hiding internal join keys from final JSON output.
 - **Zero-Flag CLI**: Uses `godborm.json` for effortless local development.
 
 ---
@@ -91,6 +95,41 @@ This creates a `models_gen.go` file with your Go structs.
 | `type?` | Makes the field **nullable** (Go pointer) |
 | `@id` | Sets the Primary Key |
 | `@foreign(T.c)` | Sets a Foreign Key relationship |
+
+---
+
+## 🔍 Querying & Relations
+
+GoDB ORM provides a powerful and intuitive API for fetching data and its relationships.
+
+### Basic Query
+```go
+var users []User
+// Only fetches name and email
+client.Select("name", "email").FindAll(&users)
+```
+
+### Loading Relations
+You can load related models using `.Include()`. The ORM is smart enough to fetch the necessary join keys automatically, even if you don't select them.
+
+```go
+var invoices []Invoices
+// Automatically fetches 'id' and 'user_id' internally to link Items and User
+client.Select("invoice_number").Include("Items", "User").FindAll(&invoices)
+```
+
+### Filtered Relations ⚡
+Control exactly which fields are fetched for related models using the `:` syntax:
+
+```go
+// Only fetch item_name and quantity for the Items relation
+client.Select("invoice_number").Include("Items:item_name,quantity", "User").FindAll(&invoices)
+```
+
+### Clean JSON Output
+Internal fields (like join keys added for relations) are automatically zeroed out after relations are loaded. This allows Go's `json:"...,omitempty"` to hide them, keeping your API responses clean and respecting your `Select()` intent.
+
+---
 
 ---
 
