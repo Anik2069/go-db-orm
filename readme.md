@@ -4,7 +4,7 @@
 
 GoDB ORM is inspired by the developer experience of Prisma and Laravel, bringing a powerful yet simple workflow to Go developers. It automates schema migrations, handles relationships, and generates type-safe Go models from simple `.schema` files.
 
-🌍 **Website**: [go-db-orm-website.vercel.app](https://go-db-orm-website.vercel.app/)
+🌍 **Website**: [go-db-orm.vercel.app](Visit Official Website)
 
 
 ---
