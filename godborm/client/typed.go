@@ -73,9 +73,21 @@ func (q *TypedBuilder[T]) Include(relations ...string) *TypedBuilder[T] {
 	return q
 }
 
-// Join adds a JOIN clause to the query.
-func (q *TypedBuilder[T]) Join(join string) *TypedBuilder[T] {
-	q.b.joins = append(q.b.joins, join)
+// Join adds an INNER JOIN clause to the query.
+func (q *TypedBuilder[T]) Join(join string, on ...string) *TypedBuilder[T] {
+	q.b.Join(join, on...)
+	return q
+}
+
+// LeftJoin adds a LEFT JOIN clause to the query.
+func (q *TypedBuilder[T]) LeftJoin(join string, on ...string) *TypedBuilder[T] {
+	q.b.LeftJoin(join, on...)
+	return q
+}
+
+// RightJoin adds a RIGHT JOIN clause to the query.
+func (q *TypedBuilder[T]) RightJoin(join string, on ...string) *TypedBuilder[T] {
+	q.b.RightJoin(join, on...)
 	return q
 }
 

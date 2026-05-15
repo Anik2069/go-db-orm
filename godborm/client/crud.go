@@ -89,15 +89,62 @@ func Offset(offset int) *DBBuilder {
 	return (&DBBuilder{}).Offset(offset)
 }
 
-// Join adds a JOIN clause to the query.
-// It can be a raw SQL join snippet or just a relation name.
-func (b *DBBuilder) Join(join string) *DBBuilder {
-	b.joins = append(b.joins, join)
+// Join adds an INNER JOIN clause to the query.
+// It can be a raw SQL join snippet, a relation name, or a table with a custom ON clause.
+//
+//	.Join("Posts")                       // Uses tags
+//	.Join("posts", "posts.user_id = id") // Custom ON
+func (b *DBBuilder) Join(join string, on ...string) *DBBuilder {
+	if len(on) > 0 {
+		b.joins = append(b.joins, join+" ON "+on[0])
+	} else {
+		b.joins = append(b.joins, join)
+	}
 	return b
 }
 
-func Join(join string) *DBBuilder {
-	return (&DBBuilder{}).Join(join)
+func Join(join string, on ...string) *DBBuilder {
+	return (&DBBuilder{}).Join(join, on...)
+}
+
+// LeftJoin adds a LEFT JOIN clause to the query.
+func (b *DBBuilder) LeftJoin(join string, on ...string) *DBBuilder {
+	var j string
+	if len(on) > 0 {
+		j = join + " ON " + on[0]
+	} else {
+		j = join
+	}
+
+	if !strings.HasPrefix(strings.ToUpper(strings.TrimSpace(j)), "LEFT ") {
+		j = "LEFT JOIN " + j
+	}
+	b.joins = append(b.joins, j)
+	return b
+}
+
+func LeftJoin(join string, on ...string) *DBBuilder {
+	return (&DBBuilder{}).LeftJoin(join, on...)
+}
+
+// RightJoin adds a RIGHT JOIN clause to the query.
+func (b *DBBuilder) RightJoin(join string, on ...string) *DBBuilder {
+	var j string
+	if len(on) > 0 {
+		j = join + " ON " + on[0]
+	} else {
+		j = join
+	}
+
+	if !strings.HasPrefix(strings.ToUpper(strings.TrimSpace(j)), "RIGHT ") {
+		j = "RIGHT JOIN " + j
+	}
+	b.joins = append(b.joins, j)
+	return b
+}
+
+func RightJoin(join string, on ...string) *DBBuilder {
+	return (&DBBuilder{}).RightJoin(join, on...)
 }
 
 

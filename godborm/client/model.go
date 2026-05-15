@@ -79,10 +79,24 @@ func (q *ModelQuery[T]) Include(relations ...string) *ModelQuery[T] {
 	return newQ
 }
 
-// Join adds a JOIN clause to the query.
-func (q *ModelQuery[T]) Join(join string) *ModelQuery[T] {
+// Join adds an INNER JOIN clause to the query.
+func (q *ModelQuery[T]) Join(join string, on ...string) *ModelQuery[T] {
 	newQ := q.clone()
-	newQ.b.joins = append(newQ.b.joins, join)
+	newQ.b.Join(join, on...)
+	return newQ
+}
+
+// LeftJoin adds a LEFT JOIN clause to the query.
+func (q *ModelQuery[T]) LeftJoin(join string, on ...string) *ModelQuery[T] {
+	newQ := q.clone()
+	newQ.b.LeftJoin(join, on...)
+	return newQ
+}
+
+// RightJoin adds a RIGHT JOIN clause to the query.
+func (q *ModelQuery[T]) RightJoin(join string, on ...string) *ModelQuery[T] {
+	newQ := q.clone()
+	newQ.b.RightJoin(join, on...)
 	return newQ
 }
 

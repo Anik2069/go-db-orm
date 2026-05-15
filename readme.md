@@ -23,6 +23,7 @@ GoDB ORM is inspired by the developer experience of Prisma and Laravel, bringing
 - **Smart Relation Loading**: 
     - **Filtered Includes**: Select specific fields for relations using `Relation:col1,col2` syntax.
     - **Auto-Linking**: Automatically fetches required join keys for relations if missing from `Select()`.
+    - **Advanced Joining**: Support for `Join`, `LeftJoin`, and `RightJoin` with automated relation-mapping or custom `ON` conditions.
     - **Clean JSON**: Respects `Select()` by hiding internal join keys from final JSON output.
 - **Zero-Flag CLI**: Uses `godborm.json` for effortless local development.
 - **Generic Type-Safe API**: `client.Query[User]()` — compile-time checked queries, no `interface{}`, no casting.
@@ -295,7 +296,31 @@ users, err := client.Query[User]().
     All()
 ```
 
-**Select specific columns:**
+### ✅ Advanced Joining
+GoDB ORM supports **Inner**, **Left**, and **Right** joins. You can rely on your model relations or provide custom `ON` conditions at runtime.
+
+**Automated Join (via Relations):**
+```go
+// Uses tags: fields=customer_id,references=id
+items, err := client.Query[Item]().Join("Customer").All()
+```
+
+**Custom Join (Manual Override):**
+```go
+// Specify table and custom ON clause
+items, err := client.Query[Item]().
+    LeftJoin("customers", "customers.id = items.customer_id AND customers.active = 1").
+    All()
+```
+
+**Join Types:**
+- `.Join(table, on)` -> `INNER JOIN`
+- `.LeftJoin(table, on)` -> `LEFT JOIN`
+- `.RightJoin(table, on)` -> `RIGHT JOIN`
+
+---
+
+### ✅ Select specific columns
 ```go
 users, err := client.Query[User]().
     Select("name", "email").
