@@ -8,12 +8,23 @@ import (
 	"strings"
 )
 
+// whereClause represents a WHERE condition with its arguments
+type whereClause struct {
+	condition string
+	args      []interface{}
+}
+
 // DBBuilder allows for chaining query options
 type DBBuilder struct {
 	selectedCols      []string
 	includedRelations []string
 	autoAddedCols     []string
+	whereClauses      []whereClause
+	orderBy           string
+	limit             int
+	offset            int
 }
+
 
 // Select specifies the columns to retrieve
 func Select(cols ...string) *DBBuilder {
@@ -29,6 +40,52 @@ func (b *DBBuilder) Include(relations ...string) *DBBuilder {
 func Include(relations ...string) *DBBuilder {
 	return (&DBBuilder{}).Include(relations...)
 }
+
+// Where adds a WHERE clause to the query
+func (b *DBBuilder) Where(condition string, args ...interface{}) *DBBuilder {
+	b.whereClauses = append(b.whereClauses, whereClause{condition: condition, args: args})
+	return b
+}
+
+func Where(condition string, args ...interface{}) *DBBuilder {
+	return (&DBBuilder{}).Where(condition, args...)
+}
+
+// OrderBy adds an ORDER BY clause to the query. Supports multiple calls.
+func (b *DBBuilder) OrderBy(orderBy string) *DBBuilder {
+	if b.orderBy != "" {
+		b.orderBy += ", " + orderBy
+	} else {
+		b.orderBy = orderBy
+	}
+	return b
+}
+
+
+func OrderBy(orderBy string) *DBBuilder {
+	return (&DBBuilder{}).OrderBy(orderBy)
+}
+
+// Limit adds a LIMIT clause to the query
+func (b *DBBuilder) Limit(limit int) *DBBuilder {
+	b.limit = limit
+	return b
+}
+
+func Limit(limit int) *DBBuilder {
+	return (&DBBuilder{}).Limit(limit)
+}
+
+// Offset adds an OFFSET clause to the query
+func (b *DBBuilder) Offset(offset int) *DBBuilder {
+	b.offset = offset
+	return b
+}
+
+func Offset(offset int) *DBBuilder {
+	return (&DBBuilder{}).Offset(offset)
+}
+
 
 
 // Create inserts a new record into the database
@@ -136,7 +193,39 @@ func (b *DBBuilder) FindAll(dest interface{}) error {
 	}
 
 	sqlQuery := fmt.Sprintf("SELECT %s FROM %s", queryCols, quoteIdentifier(table))
-	rows, err := DB.Query(sqlQuery)
+
+	var args []interface{}
+	if len(b.whereClauses) > 0 {
+		var conditions []string
+		for _, wc := range b.whereClauses {
+			cond := wc.condition
+			// Replace '?' with correct placeholders for the driver
+			for _, arg := range wc.args {
+				if strings.Contains(cond, "?") {
+					placeholder := getPlaceholder(len(args) + 1)
+					cond = strings.Replace(cond, "?", placeholder, 1)
+					args = append(args, arg)
+				}
+			}
+			conditions = append(conditions, cond)
+		}
+		sqlQuery += " WHERE " + strings.Join(conditions, " AND ")
+	}
+
+	if b.orderBy != "" {
+		sqlQuery += " ORDER BY " + b.orderBy
+	}
+
+	if b.limit > 0 {
+		sqlQuery += fmt.Sprintf(" LIMIT %d", b.limit)
+	}
+
+	if b.offset > 0 {
+		sqlQuery += fmt.Sprintf(" OFFSET %d", b.offset)
+	}
+
+	rows, err := DB.Query(sqlQuery, args...)
+
 	if err != nil {
 		return fmt.Errorf("FindAll error: %w", err)
 	}
@@ -209,8 +298,28 @@ func (b *DBBuilder) Find(model interface{}, id interface{}) error {
 		queryCols = getColumns(t)
 	}
 
-	sqlQuery := fmt.Sprintf("SELECT %s FROM %s WHERE id = %s LIMIT 1", queryCols, quoteIdentifier(table), getPlaceholder(1))
-	row := DB.QueryRow(sqlQuery, id)
+	sqlQuery := fmt.Sprintf("SELECT %s FROM %s WHERE id = %s", queryCols, quoteIdentifier(table), getPlaceholder(1))
+	var args []interface{}
+	args = append(args, id)
+
+	if len(b.whereClauses) > 0 {
+		for _, wc := range b.whereClauses {
+			cond := wc.condition
+			// Replace '?' with correct placeholders for the driver
+			for _, arg := range wc.args {
+				if strings.Contains(cond, "?") {
+					placeholder := getPlaceholder(len(args) + 1)
+					cond = strings.Replace(cond, "?", placeholder, 1)
+					args = append(args, arg)
+				}
+			}
+			sqlQuery += " AND " + cond
+		}
+	}
+	sqlQuery += " LIMIT 1"
+
+	row := DB.QueryRow(sqlQuery, args...)
+
 
 	var scanTargets []interface{}
 	if len(b.selectedCols) > 0 {

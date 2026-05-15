@@ -4,6 +4,9 @@
 
 GoDB ORM is inspired by the developer experience of Prisma and Laravel, bringing a powerful yet simple workflow to Go developers. It automates schema migrations, handles relationships, and generates type-safe Go models from simple `.schema` files.
 
+🌍 **Website**: [go-db-orm-website.vercel.app](https://go-db-orm-website.vercel.app/)
+
+
 ---
 
 ## ✨ Features
@@ -70,6 +73,28 @@ godborm generate --package main
 ```
 This creates a `models_gen.go` file with your Go structs.
 
+### 6. Connect in your Code
+Use the `client.Connect` function to initialize the database connection in your application.
+
+```go
+import (
+    "github.com/Anik2069/go-db-orm/godborm/client"
+)
+
+func main() {
+    // driver: "postgres" or "mysql"
+    // dsn: your connection string
+    err := client.Connect("postgres", "postgresql://user:pass@localhost:5432/dbname?sslmode=disable")
+    if err != nil {
+        panic(err)
+    }
+    defer client.Close()
+    
+    // Now you can use client.FindAll, client.Create, etc.
+}
+```
+
+
 ---
 
 ## 🛠 Configuration (`godborm.json`)
@@ -108,6 +133,20 @@ var users []User
 // Only fetches name and email
 client.Select("name", "email").FindAll(&users)
 ```
+
+### Advanced Querying 🔍
+You can chain `.Where()`, `.OrderBy()`, `.Limit()`, and `.Offset()` to refine your searches.
+
+```go
+var users []User
+client.Where("city = ?", "Dhaka").
+    Where("age > ?", 18).
+    OrderBy("created_at DESC").
+    Limit(10).
+    Offset(20).
+    FindAll(&users)
+```
+
 
 ### Loading Relations
 You can load related models using `.Include()`. The ORM is smart enough to fetch the necessary join keys automatically, even if you don't select them.
