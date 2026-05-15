@@ -23,7 +23,9 @@ type DBBuilder struct {
 	orderBy           string
 	limit             int
 	offset            int
+	executor          sqlExecutor
 }
+
 
 
 // Select specifies the columns to retrieve
@@ -88,8 +90,13 @@ func Offset(offset int) *DBBuilder {
 
 
 
-// Create inserts a new record into the database
+// Create inserts a new record into the database.
 func Create(model interface{}) error {
+	return createWithExecutor(DB, model)
+}
+
+// createWithExecutor is the internal implementation used by both Create and Tx.Create.
+func createWithExecutor(exec sqlExecutor, model interface{}) error {
 	v := reflect.ValueOf(model).Elem()
 	t := v.Type()
 	table := ToTableName(t.Name())
@@ -104,7 +111,6 @@ func Create(model interface{}) error {
 		field := t.Field(i)
 		fieldValue := v.Field(i)
 
-		// Skip relations
 		if isRelationField(field) {
 			continue
 		}
@@ -118,13 +124,11 @@ func Create(model interface{}) error {
 			continue
 		}
 
-		// Handle godb tags for ID generation
+		// Handle ID generation
 		if strings.Contains(tag, "cuid") && fieldValue.String() == "" {
-			cuid := generateCUID()
-			fieldValue.SetString(cuid)
+			fieldValue.SetString(generateCUID())
 		} else if strings.Contains(tag, "uuid") && fieldValue.String() == "" {
-			uuid := generateUUID()
-			fieldValue.SetString(uuid)
+			fieldValue.SetString(generateUUID())
 		}
 
 		dbTag := field.Tag.Get("db")
@@ -142,7 +146,6 @@ func Create(model interface{}) error {
 		quoteIdentifier(table), strings.Join(columns, ", "), strings.Join(placeholders, ", "))
 
 	if autoIncrField != "" && (DBDriver == "postgres" || DBDriver == "postgresql") {
-		// Use RETURNING for Postgres
 		dbTag := t.Field(autoIncrIdx).Tag.Get("db")
 		colName := dbTag
 		if colName == "" {
@@ -151,25 +154,21 @@ func Create(model interface{}) error {
 		sqlQuery += fmt.Sprintf(" RETURNING %s", quoteIdentifier(colName))
 
 		var lastID int64
-		err := DB.QueryRow(sqlQuery, args...).Scan(&lastID)
-		if err != nil {
-			return fmt.Errorf("Create error (postgres): %w", err)
+		if err := exec.QueryRow(sqlQuery, args...).Scan(&lastID); err != nil {
+			return fmt.Errorf("orm: create %s (postgres returning): %w", table, err)
 		}
 		v.Field(autoIncrIdx).SetInt(lastID)
 	} else {
-		res, err := DB.Exec(sqlQuery, args...)
+		res, err := exec.Exec(sqlQuery, args...)
 		if err != nil {
-			return fmt.Errorf("Create error: %w", err)
+			return fmt.Errorf("orm: create %s: %w", table, err)
 		}
-
 		if autoIncrField != "" {
-			lastID, err := res.LastInsertId()
-			if err == nil {
+			if lastID, err := res.LastInsertId(); err == nil {
 				v.Field(autoIncrIdx).SetInt(lastID)
 			}
 		}
 	}
-
 	return nil
 }
 
@@ -224,7 +223,12 @@ func (b *DBBuilder) FindAll(dest interface{}) error {
 		sqlQuery += fmt.Sprintf(" OFFSET %d", b.offset)
 	}
 
-	rows, err := DB.Query(sqlQuery, args...)
+	exec := b.executor
+	if exec == nil {
+		exec = DB
+	}
+	rows, err := exec.Query(sqlQuery, args...)
+
 
 	if err != nil {
 		return fmt.Errorf("FindAll error: %w", err)
@@ -233,34 +237,10 @@ func (b *DBBuilder) FindAll(dest interface{}) error {
 
 	for rows.Next() {
 		item := reflect.New(t).Elem()
-		var scanTargets []interface{}
 
-		if len(b.selectedCols) > 0 {
-			for _, col := range b.selectedCols {
-				found := false
-				for i := 0; i < t.NumField(); i++ {
-					if strings.ToLower(ToSnakeCase(t.Field(i).Name)) == strings.ToLower(col) {
-						scanTargets = append(scanTargets, item.Field(i).Addr().Interface())
-						found = true
-						break
-					}
-				}
-				if !found {
-					return fmt.Errorf("column %s not found in struct %s", col, t.Name())
-				}
-			}
-		} else {
-			for i := 0; i < t.NumField(); i++ {
-				if isRelationField(t.Field(i)) {
-					continue
-				}
-				scanTargets = append(scanTargets, item.Field(i).Addr().Interface())
-			}
-		}
-
-
-		if err := rows.Scan(scanTargets...); err != nil {
-			return fmt.Errorf("FindAll scan error: %w", err)
+		// Use the NULL-safe column-name-aware scanner
+		if err := scanRowIntoStruct(rows, item); err != nil {
+			return fmt.Errorf("orm: findAll %s: %w", table, err)
 		}
 
 		if len(b.includedRelations) > 0 {
@@ -318,7 +298,12 @@ func (b *DBBuilder) Find(model interface{}, id interface{}) error {
 	}
 	sqlQuery += " LIMIT 1"
 
-	row := DB.QueryRow(sqlQuery, args...)
+	exec := b.executor
+	if exec == nil {
+		exec = DB
+	}
+	row := exec.QueryRow(sqlQuery, args...)
+
 
 
 	var scanTargets []interface{}
@@ -463,8 +448,13 @@ func (rb *RawBuilder) Scan(dest interface{}) error {
 	return nil
 }
 
-// Update updates a record by ID
+// Update updates a record by ID.
 func Update(model interface{}) error {
+	return updateWithExecutor(DB, model)
+}
+
+// updateWithExecutor is the internal implementation used by both Update and Tx.Update.
+func updateWithExecutor(exec sqlExecutor, model interface{}) error {
 	t := reflect.TypeOf(model).Elem()
 	v := reflect.ValueOf(model).Elem()
 	table := ToTableName(t.Name())
@@ -494,24 +484,34 @@ func Update(model interface{}) error {
 		args = append(args, fieldValue)
 	}
 
-
 	if id == nil {
-		return fmt.Errorf("Update error: ID field is required")
+		return fmt.Errorf("orm: update %s: id field is required", table)
 	}
 
 	args = append(args, id)
-	sqlQuery := fmt.Sprintf("UPDATE %s SET %s WHERE id=%s", quoteIdentifier(table), strings.Join(sets, ", "), getPlaceholder(len(args)))
-	_, err := DB.Exec(sqlQuery, args...)
-	return err
+	sqlQuery := fmt.Sprintf("UPDATE %s SET %s WHERE id=%s",
+		quoteIdentifier(table), strings.Join(sets, ", "), getPlaceholder(len(args)))
+
+	if _, err := exec.Exec(sqlQuery, args...); err != nil {
+		return fmt.Errorf("orm: update %s: %w", table, err)
+	}
+	return nil
 }
 
-// Delete deletes a record by ID
+// Delete deletes a record by ID.
 func Delete(model interface{}, id interface{}) error {
+	return deleteWithExecutor(DB, model, id)
+}
+
+// deleteWithExecutor is the internal implementation used by both Delete and Tx.Delete.
+func deleteWithExecutor(exec sqlExecutor, model interface{}, id interface{}) error {
 	t := reflect.TypeOf(model).Elem()
 	table := ToTableName(t.Name())
 	sqlQuery := fmt.Sprintf("DELETE FROM %s WHERE id=%s", quoteIdentifier(table), getPlaceholder(1))
-	_, err := DB.Exec(sqlQuery, id)
-	return err
+	if _, err := exec.Exec(sqlQuery, id); err != nil {
+		return fmt.Errorf("orm: delete %s id=%v: %w", table, id, err)
+	}
+	return nil
 }
 
 // Helpers
