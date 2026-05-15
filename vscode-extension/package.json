@@ -1,0 +1,52 @@
+{
+  "name": "go-db-orm-vscode",
+  "displayName": "GoDB ORM",
+  "description": "VS Code extension for GoDB ORM schema files.",
+  "version": "0.1.0",
+  "publisher": "Anik2069",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Anik2069/go-db-orm"
+  },
+  "icon": "icon.png",
+
+  "engines": {
+    "vscode": "^1.75.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "contributes": {
+    "languages": [
+      {
+        "id": "godb-schema",
+        "aliases": [
+          "GoDB Schema",
+          "godb"
+        ],
+        "extensions": [
+          ".schema",
+          ".godb"
+        ],
+        "icon": {
+          "light": "./icon.png",
+          "dark": "./icon.png"
+        },
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "godb-schema",
+        "scopeName": "source.godb",
+        "path": "./syntaxes/godb.tmLanguage.json"
+      }
+    ],
+    "snippets": [
+      {
+        "language": "godb-schema",
+        "path": "./snippets.json"
+      }
+    ]
+  }
+}

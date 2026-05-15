@@ -1,0 +1,79 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "GoDB Schema",
+  "scopeName": "source.godb",
+  "patterns": [
+    {
+      "include": "#comments"
+    },
+    {
+      "include": "#keywords"
+    },
+    {
+      "include": "#types"
+    },
+    {
+      "include": "#decorators"
+    },
+    {
+      "include": "#strings"
+    },
+    {
+      "include": "#numbers"
+    }
+  ],
+  "repository": {
+    "comments": {
+      "patterns": [
+        {
+          "name": "comment.line.double-slash.godb",
+          "match": "//.*"
+        },
+        {
+          "name": "comment.block.godb",
+          "begin": "/\\*",
+          "end": "\\*/"
+        }
+      ]
+    },
+    "keywords": {
+      "patterns": [
+        {
+          "name": "keyword.other.godb",
+          "match": "\\b(model|enum|datasource|generator)\\b"
+        }
+      ]
+    },
+    "types": {
+      "patterns": [
+        {
+          "name": "entity.name.type.godb",
+          "match": "\\b(int|string|float|bool|datetime|uuid|cuid)\\b"
+        }
+      ]
+    },
+    "decorators": {
+      "patterns": [
+        {
+          "name": "entity.name.function.godb",
+          "match": "@[a-zA-Z]+"
+        }
+      ]
+    },
+    "strings": {
+      "name": "string.quoted.double.godb",
+      "begin": "\"",
+      "end": "\"",
+      "patterns": [
+        {
+          "name": "constant.character.escape.godb",
+          "match": "\\\\."
+        }
+      ]
+    },
+    "numbers": {
+      "name": "constant.numeric.godb",
+      "match": "\\b\\d+\\b"
+    }
+  }
+}

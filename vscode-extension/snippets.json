@@ -1,0 +1,22 @@
+{
+  "New Model": {
+    "prefix": "model",
+    "body": [
+      "model ${1:Name} {",
+      "  id    int    @id",
+      "  ${0}",
+      "}"
+    ],
+    "description": "Create a new GoDB model"
+  },
+  "Int Field": {
+    "prefix": "int",
+    "body": "${1:field} int",
+    "description": "Integer field"
+  },
+  "String Field": {
+    "prefix": "string",
+    "body": "${1:field} string",
+    "description": "String field"
+  }
+}
