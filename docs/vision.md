@@ -60,13 +60,16 @@ This small but solid foundation ensures we deliver a usable package while keepin
 
 ## Future Vision
 
-Future versions will add:
+To close the gap with industry standards like GORM while maintaining our schema-first advantage, future versions will focus on:
 
-- Relationships (`hasMany`, `belongsTo`)  
-- Eager loading and nested reads  
-- Migrations and schema diffing  
-- Multi-database support (MySQL, SQLite, etc.)  
-- Hooks, soft deletes, auditing  
+- **Advanced Associations**: Full support for `many-to-many` relationships and polymorphic associations.
+- **Query Power**: Implementing complex `JOIN` logic, subqueries, and `GROUP BY / HAVING` clauses within the type-safe API.
+- **Lifecycle Hooks & Middleware**: A robust plugin system for `Before/After` hooks (Create, Update, Delete, Find).
+- **Soft Deletes**: Native support for soft deletion patterns.
+- **Expanded Database Support**: Adding SQLite, SQL Server, and other major SQL dialects.
+- **Observability**: Built-in plugins for OpenTelemetry tracing, Prometheus metrics, and advanced logging.
+- **Advanced Transactions**: Support for nested transactions and savepoints.
+
 
 By following this roadmap, `go-db-orm` aims to bring **developer productivity and type safety** to Go ORMs at scale.
 
