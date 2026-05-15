@@ -74,25 +74,28 @@ godborm generate --package main
 This creates a `models_gen.go` file with your Go structs.
 
 ### 6. Connect in your Code
-Use the `client.Connect` function to initialize the database connection in your application.
+You can manually connect or use `ConnectWithConfig()` to automatically load your `godborm.json` credentials.
 
+**Option A: Using `godborm.json` (Recommended)**
 ```go
-import (
-    "github.com/Anik2069/go-db-orm/godborm/client"
-)
+import "github.com/Anik2069/go-db-orm/godborm/client"
 
 func main() {
-    // driver: "postgres" or "mysql"
-    // dsn: your connection string
-    err := client.Connect("postgres", "postgresql://user:pass@localhost:5432/dbname?sslmode=disable")
+    // Automatically reads driver and dsn from godborm.json
+    err := client.ConnectWithConfig()
     if err != nil {
         panic(err)
     }
     defer client.Close()
-    
-    // Now you can use client.FindAll, client.Create, etc.
 }
 ```
+
+**Option B: Manual Connection**
+```go
+// Useful for environment variables or dynamic configurations
+err := client.Connect("postgres", "postgresql://user:pass@localhost:5432/dbname")
+```
+
 
 
 ---
