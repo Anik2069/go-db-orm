@@ -56,6 +56,9 @@ func (q *ModelQuery[T]) clone() *ModelQuery[T] {
 	if q.b.whereClauses != nil {
 		newB.whereClauses = append([]whereClause{}, q.b.whereClauses...)
 	}
+	if q.b.joins != nil {
+		newB.joins = append([]string{}, q.b.joins...)
+	}
 	return &ModelQuery[T]{
 		model: q.model,
 		b:     &newB,
@@ -73,6 +76,13 @@ func (q *ModelQuery[T]) Select(cols ...string) *ModelQuery[T] {
 func (q *ModelQuery[T]) Include(relations ...string) *ModelQuery[T] {
 	newQ := q.clone()
 	newQ.b.includedRelations = append(newQ.b.includedRelations, relations...)
+	return newQ
+}
+
+// Join adds a JOIN clause to the query.
+func (q *ModelQuery[T]) Join(join string) *ModelQuery[T] {
+	newQ := q.clone()
+	newQ.b.joins = append(newQ.b.joins, join)
 	return newQ
 }
 

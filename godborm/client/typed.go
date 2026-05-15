@@ -73,6 +73,12 @@ func (q *TypedBuilder[T]) Include(relations ...string) *TypedBuilder[T] {
 	return q
 }
 
+// Join adds a JOIN clause to the query.
+func (q *TypedBuilder[T]) Join(join string) *TypedBuilder[T] {
+	q.b.joins = append(q.b.joins, join)
+	return q
+}
+
 // Where adds a WHERE condition. Multiple calls are joined with AND.
 // Use ? as placeholder regardless of driver; the ORM rewrites to $N for PostgreSQL.
 func (q *TypedBuilder[T]) Where(condition string, args ...interface{}) *TypedBuilder[T] {

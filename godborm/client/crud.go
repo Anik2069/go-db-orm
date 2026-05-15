@@ -20,6 +20,7 @@ type DBBuilder struct {
 	includedRelations []string
 	autoAddedCols     []string
 	whereClauses      []whereClause
+	joins             []string
 	orderBy           string
 	limit             int
 	offset            int
@@ -86,6 +87,17 @@ func (b *DBBuilder) Offset(offset int) *DBBuilder {
 
 func Offset(offset int) *DBBuilder {
 	return (&DBBuilder{}).Offset(offset)
+}
+
+// Join adds a JOIN clause to the query.
+// It can be a raw SQL join snippet or just a relation name.
+func (b *DBBuilder) Join(join string) *DBBuilder {
+	b.joins = append(b.joins, join)
+	return b
+}
+
+func Join(join string) *DBBuilder {
+	return (&DBBuilder{}).Join(join)
 }
 
 
@@ -188,10 +200,32 @@ func (b *DBBuilder) FindAll(dest interface{}) error {
 		}
 		queryCols = strings.Join(quoted, ", ")
 	} else {
-		queryCols = getColumns(t)
+		queryCols = getColumns(t, table)
 	}
 
 	sqlQuery := fmt.Sprintf("SELECT %s FROM %s", queryCols, quoteIdentifier(table))
+
+	if len(b.joins) > 0 {
+		for _, join := range b.joins {
+			if !strings.Contains(strings.ToUpper(join), " JOIN ") && !strings.Contains(join, " ON ") {
+				relSQL, err := b.resolveJoinRelation(t, join)
+				if err == nil {
+					sqlQuery += " " + relSQL
+				} else {
+					sqlQuery += " JOIN " + join
+				}
+			} else {
+				if !strings.HasPrefix(strings.ToUpper(strings.TrimSpace(join)), "INNER ") &&
+					!strings.HasPrefix(strings.ToUpper(strings.TrimSpace(join)), "LEFT ") &&
+					!strings.HasPrefix(strings.ToUpper(strings.TrimSpace(join)), "RIGHT ") &&
+					!strings.HasPrefix(strings.ToUpper(strings.TrimSpace(join)), "JOIN ") {
+					sqlQuery += " JOIN " + join
+				} else {
+					sqlQuery += " " + join
+				}
+			}
+		}
+	}
 
 	var args []interface{}
 	if len(b.whereClauses) > 0 {
@@ -275,10 +309,34 @@ func (b *DBBuilder) Find(model interface{}, id interface{}) error {
 		}
 		queryCols = strings.Join(quoted, ", ")
 	} else {
-		queryCols = getColumns(t)
+		queryCols = getColumns(t, table)
 	}
 
-	sqlQuery := fmt.Sprintf("SELECT %s FROM %s WHERE id = %s", queryCols, quoteIdentifier(table), getPlaceholder(1))
+	sqlQuery := fmt.Sprintf("SELECT %s FROM %s", queryCols, quoteIdentifier(table))
+
+	if len(b.joins) > 0 {
+		for _, join := range b.joins {
+			if !strings.Contains(strings.ToUpper(join), " JOIN ") && !strings.Contains(join, " ON ") {
+				relSQL, err := b.resolveJoinRelation(t, join)
+				if err == nil {
+					sqlQuery += " " + relSQL
+				} else {
+					sqlQuery += " JOIN " + join
+				}
+			} else {
+				if !strings.HasPrefix(strings.ToUpper(strings.TrimSpace(join)), "INNER ") &&
+					!strings.HasPrefix(strings.ToUpper(strings.TrimSpace(join)), "LEFT ") &&
+					!strings.HasPrefix(strings.ToUpper(strings.TrimSpace(join)), "RIGHT ") &&
+					!strings.HasPrefix(strings.ToUpper(strings.TrimSpace(join)), "JOIN ") {
+					sqlQuery += " JOIN " + join
+				} else {
+					sqlQuery += " " + join
+				}
+			}
+		}
+	}
+
+	sqlQuery += fmt.Sprintf(" WHERE %s.id = %s", quoteIdentifier(table), getPlaceholder(1))
 	var args []interface{}
 	args = append(args, id)
 
@@ -515,20 +573,24 @@ func deleteWithExecutor(exec sqlExecutor, model interface{}, id interface{}) err
 }
 
 // Helpers
-func getColumns(t reflect.Type) string {
+func getColumns(t reflect.Type, tableName string) string {
 	var cols []string
 	for i := 0; i < t.NumField(); i++ {
 		field := t.Field(i)
 		if isRelationField(field) {
 			continue
 		}
-		
+
 		dbTag := field.Tag.Get("db")
 		colName := dbTag
 		if colName == "" {
 			colName = ToSnakeCase(field.Name)
 		}
-		cols = append(cols, quoteIdentifier(colName))
+		if tableName != "" {
+			cols = append(cols, fmt.Sprintf("%s.%s", quoteIdentifier(tableName), quoteIdentifier(colName)))
+		} else {
+			cols = append(cols, quoteIdentifier(colName))
+		}
 	}
 	return strings.Join(cols, ", ")
 }
@@ -624,7 +686,7 @@ func (b *DBBuilder) loadRelations(v reflect.Value, relations []string) error {
 				}
 				queryCols = strings.Join(quoted, ", ")
 			} else {
-				queryCols = getColumns(targetType)
+				queryCols = getColumns(targetType, targetTable)
 			}
 
 			sql := fmt.Sprintf("SELECT %s FROM %s WHERE %s = %s", 
@@ -662,7 +724,7 @@ func (b *DBBuilder) loadRelations(v reflect.Value, relations []string) error {
 				}
 				queryCols = strings.Join(quoted, ", ")
 			} else {
-				queryCols = getColumns(targetType)
+				queryCols = getColumns(targetType, targetTable)
 			}
 
 			sql := fmt.Sprintf("SELECT %s FROM %s WHERE %s = %s LIMIT 1", 
@@ -798,6 +860,52 @@ func quoteIdentifier(s string) string {
 		return fmt.Sprintf("\"%s\"", s)
 	}
 	return fmt.Sprintf("`%s`", s)
+}
+
+func (b *DBBuilder) resolveJoinRelation(t reflect.Type, relName string) (string, error) {
+	field, ok := t.FieldByName(relName)
+	if !ok {
+		return "", fmt.Errorf("relation %s not found", relName)
+	}
+
+	tag := field.Tag.Get("godb")
+	if !strings.Contains(tag, "relation") {
+		return "", fmt.Errorf("field %s is not a relation", relName)
+	}
+
+	relFields, relRefs := parseRelationMetadata(tag)
+	if len(relFields) == 0 || len(relRefs) == 0 {
+		return "", fmt.Errorf("relation metadata missing for %s", relName)
+	}
+
+	targetType := field.Type
+	if targetType.Kind() == reflect.Slice || targetType.Kind() == reflect.Ptr {
+		targetType = targetType.Elem()
+	}
+	targetTable := ToTableName(targetType.Name())
+	sourceTable := ToTableName(t.Name())
+
+	sourceCol := b.getColumnName(t, relFields[0])
+	targetCol := b.getColumnName(targetType, relRefs[0])
+
+	return fmt.Sprintf("INNER JOIN %s ON %s.%s = %s.%s",
+		quoteIdentifier(targetTable),
+		quoteIdentifier(sourceTable), quoteIdentifier(sourceCol),
+		quoteIdentifier(targetTable), quoteIdentifier(targetCol)), nil
+}
+
+func (b *DBBuilder) getColumnName(t reflect.Type, fieldNameOrTag string) string {
+	for i := 0; i < t.NumField(); i++ {
+		f := t.Field(i)
+		dbTag := f.Tag.Get("db")
+		if strings.ToLower(dbTag) == strings.ToLower(fieldNameOrTag) || strings.ToLower(f.Name) == strings.ToLower(fieldNameOrTag) {
+			if dbTag != "" {
+				return dbTag
+			}
+			return ToSnakeCase(f.Name)
+		}
+	}
+	return ToSnakeCase(fieldNameOrTag)
 }
 
 func generateCUID() string {
